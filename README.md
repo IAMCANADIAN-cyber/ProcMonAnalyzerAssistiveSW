@@ -8,20 +8,20 @@ Basically a "Mark Russinovich" in a script -- meant to basically do the work for
 ## 📜 Executive Summary
 **ProcMon-Reporter** is a high-performance, memory-safe forensic engine written in PowerShell 5.1. It is engineered to perform **Stateful Heuristic Analysis** on Process Monitor (`.CSV`) logs, correlating them with Windows Event Logs (`.EVTX`) and Crash Dumps (`.DMP`) to detect specific failure modes in Enterprise Assistive Technology (JAWS, ZoomText, Fusion).
 
-Unlike standard log parsers which rely on static signature matching, this engine implements a **Sliding Window State Machine** to detect asynchronous race conditions, cross-process resource contention (OpLock breaks), and kernel-level interference (Filter Altitude collisions).
+While detecting **Security Interference** (EDR/DLP hooks) is a core pillar, this engine is equally specialized in identifying **Application Compatibility**, **OS Configuration**, and **Network Performance** bottlenecks that cause "Silent Failures" in screen readers.
 
 ## 🧠 Core Intelligence Engines
-1.  **The "Archivist" Engine:**
-    * *Function:* Detects low-level I/O & Driver conflicts (OpLock Breaks, Fast I/O Disallowance, Reparse Loops).
-    * *Logic:* Correlates `Result` codes with `Duration` thresholds to identify "Soft Hangs."
-2.  **The "Chronos" Engine:**
-    * *Function:* Performs Time-Travel Analysis.
+1.  **The "Archivist" Engine (Stability & I/O):**
+    * *Focus:* Low-level I/O & Driver conflicts.
+    * *Logic:* Detects OpLock Breaks, Fast I/O Disallowance, and Reparse Point Loops (OneDrive recursion).
+2.  **The "Chronos" Engine (Time-Travel):**
+    * *Focus:* Asynchronous Correlation.
     * *Logic:* Ingests historical Crash Dumps and scans the current live log for matching module loads (`LoadImage`) to predict recurring crashes.
-3.  **The "Omnipotent" Engine:**
-    * *Function:* Contextual awareness of OS subsystems.
+3.  **The "Omnipotent" Engine (Context & OS):**
+    * *Focus:* OS Subsystems and Interoperability.
     * *Logic:* Identifies Secure Desktop isolation, Legacy Bridge (UIA-to-MSAA) collapse, and Clipboard Chain contention.
-4.  **The "Oracle" Knowledge Base:**
-    * *Function:* Deterministic mapping of generic errors to vendor-specific KBs.
+4.  **The "Oracle" Knowledge Base (Vendor Intelligence):**
+    * *Focus:* Deterministic mapping of generic errors to vendor-specific KBs.
     * *Logic:* `Process + Error Context -> Cause/Fix/Vendor Link`.
 
 ## ⚙️ Technical Constraints (NON-NEGOTIABLE)

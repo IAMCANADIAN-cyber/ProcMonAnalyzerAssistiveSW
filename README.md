@@ -29,3 +29,8 @@ While detecting **Security Interference** (EDR/DLP hooks) is a core pillar, this
 * **Memory Model:** Streaming Pipeline (ReadCount: 10,000). **Never** load the full CSV into RAM.
 * **Dependency:** Zero-dependency (Self-contained script).
 * **Output:** Standalone HTML with embedded CSS/JS.
+
+## Capabilities
+- **TSS Recursive Processing:** Point to a TSS output folder; the engine does the rest.
+- **Oracle Knowledge Engine:** Deterministic bug detection for Microsoft 365, Edge, and JAWS.
+- **Forensic Thread Profiling:** Detects silent starvation and kernel wait-state issues.**

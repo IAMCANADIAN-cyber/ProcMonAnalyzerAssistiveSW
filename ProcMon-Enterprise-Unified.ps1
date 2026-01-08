@@ -65,7 +65,7 @@ param(
 # =========================
 # 0) PREFLIGHT / GUARDRAILS
 # =========================
-$ScriptVersion = "V1208-OfflineOracle"
+$ScriptVersion = "V1300-Unified-Overseer"
 $StartUtc = [DateTime]::UtcNow
 
 if ($PSVersionTable.PSVersion.Major -lt 5 -or ($PSVersionTable.PSVersion.Major -eq 5 -and $PSVersionTable.PSVersion.Minor -lt 1)) {
@@ -119,8 +119,6 @@ function Initialize-OracleDb {
             @{ name="freedomscientific-jaws-whatsnew"; url="https://support.freedomscientific.com/downloads/jaws/JAWSWhatsNew" },
             @{ name="changewindows-timeline-pc"; url="https://www.changewindows.org/timeline/pc" },
             @{ name="mslearn-system-error-code-lookup-tool"; url="https://learn.microsoft.com/en-us/windows/win32/debug/system-error-code-lookup-tool" }
-
-
         )
         entries = @(
             @{
@@ -137,6 +135,67 @@ function Initialize-OracleDb {
                 fix="Use the report's prioritized steps. Add organization-specific known issues to Oracle cache/DB as you learn them."
                 url=""
                 source="seed"
+                last_seen_utc=[DateTime]::UtcNow.ToString("o")
+            },
+            # --- OVERSEER KNOWLEDGE BASE (V1300) ---
+            @{
+                app="msedge.exe"
+                title="Chromium v134 Copy/Paste Bug"
+                symptom_patterns=@("134.0.0", "copy", "paste")
+                context="Chromium v134 Copy/Paste Bug"
+                fix="Update JAWS to April 2025 Release or newer."
+                url="https://blog.freedomscientific.com/install-software-updates-to-resolve-jaws-and-zoomtext-issues/"
+                source="OverseerKB"
+                last_seen_utc=[DateTime]::UtcNow.ToString("o")
+            },
+            @{
+                app="msedge.exe"
+                title="Windows 11 24H2 WebView2 Corruption"
+                symptom_patterns=@("24H2", "webview2", "corruption")
+                context="Windows 11 24H2 WebView2 Corruption"
+                fix="Run 'sfc /scannow' or update WebView2 Runtime."
+                url=""
+                source="OverseerKB"
+                last_seen_utc=[DateTime]::UtcNow.ToString("o")
+            },
+            @{
+                app="WINWORD.EXE"
+                title="Dragon Add-in Disabled"
+                symptom_patterns=@("dgnword.dll", "dragon", "add-in")
+                context="Dragon Add-in Disabled"
+                fix="Re-enable Dragon Add-in in Word Options > Add-ins."
+                url=""
+                source="OverseerKB"
+                last_seen_utc=[DateTime]::UtcNow.ToString("o")
+            },
+            @{
+                app="WINWORD.EXE"
+                title="M365 Modern Comments Deadlock"
+                symptom_patterns=@("ModernComments", "deadlock")
+                context="M365 Modern Comments Deadlock"
+                fix="Ensure Office Build > 16.0.14000 for UIA fixes."
+                url=""
+                source="OverseerKB"
+                last_seen_utc=[DateTime]::UtcNow.ToString("o")
+            },
+            @{
+                app="jfw.exe"
+                title="Security DLL Heap Corruption (0xC0000374)"
+                symptom_patterns=@("0xC0000374", "heap corruption")
+                context="Security DLL Heap Corruption"
+                fix="Identify the third-party DLL causing 0xC0000374 in the 'Hook Injection' table."
+                url=""
+                source="OverseerKB"
+                last_seen_utc=[DateTime]::UtcNow.ToString("o")
+            },
+            @{
+                app="jfw.exe"
+                title="AI Labeler Focus Hang"
+                symptom_patterns=@("AI_Labeler", "focus", "hang")
+                context="AI Labeler Focus Hang"
+                fix="Update JAWS 2026 to December 2025 Enhancement patch."
+                url=""
+                source="OverseerKB"
                 last_seen_utc=[DateTime]::UtcNow.ToString("o")
             }
         )
@@ -1626,6 +1685,11 @@ $Detectors = @(
 # =========================
 # 7) STREAM PARSE CSV + APPLY DETECTORS
 # =========================
+
+# Global Suspect Buffer for Security Contention (Time correlation)
+# Stores last seen time of security process activity per Path.
+$GlobalSuspectBuffer = [System.Collections.Generic.Dictionary[string, PSObject]]::new()
+
 function Stream-ProcMonCsv {
     param([string]$CsvPath)
 
@@ -1711,6 +1775,27 @@ function Stream-ProcMonCsv {
         # WER flood signals
         if ($proc -match '(?i)^werfault\.exe$') { $WerCounts["Fault"]++ }
         if ($p -match '(?i)\WER\|\Microsoft\Windows\WER\') { $WerCounts["Writes"]++ }
+
+        # --- SECURITY CONTENTION LOGIC (V1300) ---
+        # Update GlobalSuspectBuffer if this is a Security Process touching a path
+        if ($Sec_Processes.Contains($proc)) {
+             $GlobalSuspectBuffer[$p] = [PSCustomObject]@{ Time=$tod; Proc=$proc; Path=$p }
+        }
+
+        # Check for Contention: AT Process Denied + Recent Security Touch
+        if ($AT_Processes.Contains($proc) -and ($res -match "DENIED|SHARING|OPLOCK") -and $GlobalSuspectBuffer.ContainsKey($p)) {
+            $Suspect = $GlobalSuspectBuffer[$p]
+            # Check for contention within 0.5s (SlowThresholdSeconds default)
+            if ([Math]::Abs(($tod - $Suspect.Time).TotalSeconds) -le 0.5) {
+                 $cat="SECURITY LOCK"
+                 $sev="Critical"
+                 $why="A security process ($($Suspect.Proc)) accessed this path immediately before the AT process was denied/blocked."
+                 $confirm="This indicates a race condition or aggressive scanning lock."
+                 $next="Exclude path '$p' from $($Suspect.Proc) scanning or real-time protection."
+
+                 Add-Finding -Category $cat -Severity $sev -Process $proc -PID $pid -TID $tid -User $usr -ImagePath $img -CommandLine $cmd -Operation $op -Path $p -Result $res -Detail ("Contention with: " + $Suspect.Proc) -Time $tod -Duration $dur -Why $why -HowToConfirm $confirm -NextSteps $next -Oracle $null | Out-Null
+            }
+        }
 
         foreach ($detFn in $Detectors) {
             $r = & $detFn $evt

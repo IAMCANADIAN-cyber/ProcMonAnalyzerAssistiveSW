@@ -949,6 +949,7 @@ $ArtifactGlobs = @(
     "*.zip", "*.7z", "*.rar",
     "*.json", "*.xml",
     "*.ini", "*.cfg",
+    "*.ls",     # JAWS application logs
     "*.etl.*",  # some ETL exports get suffixed
     "*.etl.zip",
     "*.etl.cab"
@@ -1661,6 +1662,24 @@ function Detect-TokenMismatch {
     return @{ Category=$cat; Severity=$sev; Oracle=$oracle; Why=$why; Confirm=$confirm; Next=$next }
 }
 
+# Detector: Focus Bounce (Registry activity on ForegroundLockTimeout)
+function Detect-FocusBounce {
+    param($evt)
+    if ($evt.Operation -notmatch '^Reg') { return $null }
+    if ($evt.Path -notmatch 'ForegroundLockTimeout|FocusBorderHeight|FocusBorderWidth|SPI_GETFOREGROUNDLOCKTIMEOUT') { return $null }
+
+    $cat="FOCUS BOUNCE"
+    $sev="Medium"
+    if ($evt.Operation -match 'Set') { $sev="High" }
+
+    $oracle = Oracle-Match -ProcessName $evt.Process -PathText $evt.Path -CategoryText $cat -DetailText $evt.Detail
+    $why="Rapid changes or queries to focus stealing prevention settings (ForegroundLockTimeout) often precede or accompany 'focus wars' where apps fight for the foreground window."
+    $confirm="Filter ProcMon for 'ForegroundLockTimeout' and identify the process querying/setting it repeatedly."
+    $next="If an app is spamming this key, it may be trying to bypass OS focus protection. Check for 'SetForegroundWindow' calls in API traces or try enabling the 'LockSetForegroundWindow' compatibility shim."
+
+    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; Why=$why; Confirm=$confirm; Next=$next }
+}
+
 # Detector: Touch Input / Tablet PC contention (Touch War)
 function Detect-TouchWar {
     param($evt)
@@ -1703,6 +1722,7 @@ $Detectors = @(
     ${function:Detect-LegacyBridge},
     ${function:Detect-VCppMissing},
     ${function:Detect-ReparseLoop},
+    ${function:Detect-FocusBounce},
     ${function:Detect-TouchWar},
     ${function:Detect-ClipboardLock},
     ${function:Detect-AudioDucking},

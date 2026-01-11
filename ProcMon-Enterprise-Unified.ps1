@@ -1661,6 +1661,33 @@ function Detect-TokenMismatch {
     return @{ Category=$cat; Severity=$sev; Oracle=$oracle; Why=$why; Confirm=$confirm; Next=$next }
 }
 
+# Detector: Touch Input / Tablet PC contention (Touch War)
+function Detect-TouchWar {
+    param($evt)
+    $isTouchProc = ($evt.Process -match '(?i)wisptis\.exe|tabtip\.exe|inputservice|textinputhost\.exe|ctfmon\.exe')
+    $isTouchPath = ($evt.Path -match '(?i)Wisp|Tablet|InputService|TabTip')
+
+    if (-not ($isTouchProc -or $isTouchPath)) { return $null }
+
+    # We only care about failures
+    if ($evt.Result -notmatch 'ACCESS DENIED|TIMEOUT|SHARING VIOLATION|OPLOCK|FAST_IO|NAME NOT FOUND') { return $null }
+
+    # If it's just "NAME NOT FOUND" for a touch proc, maybe low noise.
+    if ($evt.Result -eq 'NAME NOT FOUND' -and $isTouchProc) { return $null }
+
+    $cat="TOUCH WAR"
+    $sev="Medium"
+    # Escalation: Access Denied or Timeout is serious
+    if ($evt.Result -match 'ACCESS DENIED|TIMEOUT') { $sev="High" }
+
+    $oracle = Oracle-Match -ProcessName $evt.Process -PathText $evt.Path -CategoryText $cat -DetailText $evt.Detail
+    $why="Contention or blockage in the Touch Input subsystem (Wisptis/TabTip) often leads to focus instability ('Focus Bounce') or input freezes for AT users."
+    $confirm="Look for 'bouncing' window focus or the OSK appearing/disappearing rapidly. Correlate with 'InputService' or 'Wisptis' errors."
+    $next="Stop 'Touch Keyboard and Handwriting Panel Service'; exclude Wisptis/TabTip from security scanning; verify if a physical touch screen is triggering interrupts."
+
+    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; Why=$why; Confirm=$confirm; Next=$next }
+}
+
 # Detector registry (order matters: most actionable first)
 $Detectors = @(
     ${function:Detect-ProcessExitCodes},
@@ -1676,6 +1703,7 @@ $Detectors = @(
     ${function:Detect-LegacyBridge},
     ${function:Detect-VCppMissing},
     ${function:Detect-ReparseLoop},
+    ${function:Detect-TouchWar},
     ${function:Detect-ClipboardLock},
     ${function:Detect-AudioDucking},
     ${function:Detect-MfaBlock},

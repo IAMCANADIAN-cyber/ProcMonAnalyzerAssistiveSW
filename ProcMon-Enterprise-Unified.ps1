@@ -1661,9 +1661,42 @@ function Detect-TokenMismatch {
     return @{ Category=$cat; Severity=$sev; Oracle=$oracle; Why=$why; Confirm=$confirm; Next=$next }
 }
 
+# Detector: Touch War (Wisptis/TabTip/Ink contention)
+function Detect-TouchWar {
+    param($evt)
+    if ($evt.Process -notmatch '(?i)wisptis\.exe|tabtip\.exe|InputService|TextInputHost') { return $null }
+    if ($evt.Result -notmatch 'ACCESS DENIED|SHARING VIOLATION|OPLOCK|TIMEOUT|PIPE BUSY') { return $null }
+
+    $cat = "TOUCH WAR"
+    $sev = "Medium"
+    $oracle = Oracle-Match -ProcessName $evt.Process -PathText $evt.Path -CategoryText $cat -DetailText $evt.Detail
+    $why = "Contention in touch input services (Wisptis/TabTip) can cause focus fighting or 'stuck' modifiers when AT is intercepting input."
+    $confirm = "Correlate with focus bounce or typing lag. Check if touch screen is active."
+    $next = "Disable touch screen driver in Device Manager (if not needed) to isolate; check for 'phantom touches'."
+    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; Why=$why; Confirm=$confirm; Next=$next }
+}
+
+# Detector: Focus Bounce (Rapid foreground/focus registry thrash)
+function Detect-FocusBounce {
+    param($evt)
+    if ($evt.Operation -notmatch '^Reg') { return $null }
+    if ($evt.Path -notmatch '(?i)ForegroundLockTimeout|FocusBorderWidth|UserPreferenceMask|SPI_GETFOREGROUNDLOCKTIMEOUT') { return $null }
+
+    # We might need to detect rate, but just touching these keys is often a signal of a fight
+    $cat = "FOCUS BOUNCE"
+    $sev = "Low"
+    $oracle = Oracle-Match -ProcessName $evt.Process -PathText $evt.Path -CategoryText $cat -DetailText $evt.Detail
+    $why = "Repeated queries/writes to ForegroundLockTimeout often indicate apps fighting for focus or attempting to bypass focus stealing prevention."
+    $confirm = "Check for rapid window title changes or flashing taskbar icons."
+    $next = "Identify the app querying this setting; check for 'always on top' settings or background activity that demands focus."
+    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; Why=$why; Confirm=$confirm; Next=$next }
+}
+
 # Detector registry (order matters: most actionable first)
 $Detectors = @(
     ${function:Detect-ProcessExitCodes},
+    ${function:Detect-TouchWar},
+    ${function:Detect-FocusBounce},
     ${function:Detect-HookInjection},
     ${function:Detect-AccessDenied},
     ${function:Detect-OplockFastIo},
@@ -1861,6 +1894,41 @@ if ($WerCounts["Fault"] -ge 20 -or $WerCounts["Writes"] -ge 200) {
 # =========================
 function TimeSpanAbsSeconds([TimeSpan]$a, [TimeSpan]$b) {
     return [Math]::Abs(($a - $b).TotalSeconds)
+}
+
+# CHRONOS: Enhanced Dump Correlation
+# If we have a dump file for an app that appears in the CSV, flag it even if we didn't catch the crash event.
+foreach ($d in $DumpFiles) {
+    # Extract app name from dump filename (heuristic)
+    # e.g. "winword.exe.1234.dmp" -> "winword.exe"
+    $baseName = $d.Name
+    if ($baseName -match '(?i)^(.+\.exe)\.') {
+        $baseName = $Matches[1]
+    } elseif ($baseName -match '(?i)^(.+)_([0-9a-f]+)\.dmp$') {
+         # WerFault style sometimes: AppName_Thumbprint.dmp or similar
+         $baseName = $Matches[1]
+    }
+
+    # Check if this process exists in findings or CSV stats
+    # We'll search Findings for any event from this process
+    $related = $Findings | Where-Object { $_.Process -ieq $baseName } | Select-Object -First 1
+
+    if ($related) {
+        $cat = "CRASH ARTIFACT"
+        $sev = "Critical"
+        $why = "A memory dump file ($($d.Name)) correlates with process activity in the trace."
+        $confirm = "Analyze the dump file with WinDbg ( !analyze -v ) to find the faulting module."
+        $next = "Check the stack trace in the dump. If it implicates a security DLL or hook, configure exclusions."
+
+        # We don't have a specific log event for the dump creation in the CSV (it happened externally),
+        # so we attach this finding to the *last seen* event of that process or just time 0.
+        # Better: create a new finding at the dump timestamp (if we have it).
+
+        $dumpTime = $d.CreationTime.TimeOfDay
+        # Or use the time of the related event if dump time is way off (e.g. file copy)
+
+        $fid = Add-Finding -Category $cat -Severity $sev -Process $baseName -PID "" -TID "" -User "" -ImagePath "" -CommandLine "" -Operation "(dump found)" -Path $d.FullName -Result "DUMP_FILE" -Detail ("Size: {0:N2} MB" -f ($d.Length / 1MB)) -Time $dumpTime -Duration 0.0 -Why $why -HowToConfirm $confirm -NextSteps $next -Oracle $null
+    }
 }
 
 foreach ($f in $Findings) {

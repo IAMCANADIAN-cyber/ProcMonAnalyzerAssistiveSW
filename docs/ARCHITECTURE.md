@@ -21,7 +21,14 @@ The GSB is a `Dictionary<FilePath, EventObject>` representing the "Security Stat
         FLAG "Cross-Process Race Condition"
     ```
 
-## 3. The "Oracle" Data Structure
+## 3. The Oracle Data Flow (Offline Architecture)
+The Oracle engine avoids direct internet access on the analysis machine.
+1.  **Online Phase:** `ProcMon-OracleCache-Builder.ps1` runs on a connected machine, fetching HTML snapshots from Microsoft/Freedom Scientific.
+2.  **Transport Phase:** The `OracleCache/` folder is transferred to the isolated environment.
+3.  **Ingest Phase:** `ProcMon-Enterprise-Unified.ps1 -UpdateOracleDb` parses the raw HTML snapshots, extracting KB numbers, build versions, and issue descriptions into a local JSON database (`ProcMonOracle.db.json`).
+4.  **Analysis Phase:** The main loop queries this in-memory JSON db for pattern matches.
+
+### The "Oracle" Data Structure
 The Oracle is a multi-dimensional Hashtable enabling O(1) lookups for known issues.
 * **Schema:**
     ```text

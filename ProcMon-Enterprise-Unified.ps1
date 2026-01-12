@@ -1319,7 +1319,15 @@ function Add-Finding {
         OracleTitle= if($Oracle){$Oracle.title}else{""}
         OracleFix= if($Oracle){$Oracle.fix}else{""}
         OracleUrl= if($Oracle){$Oracle.url}else{""}
+        UserExperience= ""
+        TechnicalDetail= ""
+        Remediation= ""
     }
+    # Populate the "Mark Russinovich" layers if not provided (fallback to V1207 strings)
+    if ([string]::IsNullOrWhiteSpace($obj.UserExperience)) { $obj.UserExperience = "User sees: " + $Why }
+    if ([string]::IsNullOrWhiteSpace($obj.TechnicalDetail)) { $obj.TechnicalDetail = "Technical: " + $Detail }
+    if ([string]::IsNullOrWhiteSpace($obj.Remediation)) { $obj.Remediation = "Action: " + $NextSteps }
+
     $Findings.Add($obj) | Out-Null
 
     if (-not $Evidence.ContainsKey($id)) {
@@ -1718,6 +1726,74 @@ function Detect-TouchWar {
     return @{ Category=$cat; Severity=$sev; Oracle=$oracle; Why=$why; Confirm=$confirm; Next=$next }
 }
 
+# Detector: Delete Pending (Ghost Files)
+function Detect-DeletePending {
+    param($evt)
+    if ($evt.Result -notmatch "DELETE PENDING") { return $null }
+    $cat = "DELETE PENDING"
+    $sev = if ($AT_Processes.Contains($evt.Process)) { "High" } else { "Medium" }
+    $oracle = Oracle-Match -ProcessName $evt.Process -PathText $evt.Path -CategoryText $cat -DetailText $evt.Detail
+
+    $why = "The file is marked for deletion but a handle is still open. Subsequent attempts to open it fail with ACCESS DENIED or SHARING VIOLATION."
+    $confirm = "Check for other processes holding a handle to this file using Handle.exe or Resource Monitor. The file entry exists in the directory but is logically 'dead'."
+    $next = "Identify the process holding the open handle (often AV, backup, or indexer) and terminate/restart it to allow the delete to complete."
+
+    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; Why=$why; Confirm=$confirm; Next=$next }
+}
+
+# Detector: Zone.Identifier (Mark of the Web)
+function Detect-ZoneIdentifier {
+    param($evt)
+    if ($evt.Path -notmatch ":Zone.Identifier") { return $null }
+    if ($evt.Result -notmatch "SUCCESS") { return $null } # Only interesting if they actually read it and then maybe fail later
+
+    $cat = "MARK OF THE WEB"
+    $sev = "Medium" # Informational unless followed by a block
+    $oracle = Oracle-Match -ProcessName $evt.Process -PathText $evt.Path -CategoryText $cat -DetailText $evt.Detail
+
+    $why = "The application is checking the 'Mark of the Web' (Zone.Identifier) stream. This often precedes a SmartScreen block or 'Protected View' sandbox."
+    $confirm = "Check if the process terminates or shows a security warning immediately after reading this stream."
+    $next = "Right-click the file -> Properties -> Unblock. Or use PowerShell Unblock-File."
+
+    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; Why=$why; Confirm=$confirm; Next=$next }
+}
+
+# Detector: Network Reset (TCP)
+function Detect-NetworkReset {
+    param($evt)
+    if ($evt.Operation -notmatch "TCP") { return $null }
+    if ($evt.Result -notmatch "RESET|ABORT|CANCELLED") { return $null }
+
+    $cat = "NETWORK RESET"
+    $sev = "High"
+    $oracle = Oracle-Match -ProcessName $evt.Process -PathText $evt.Path -CategoryText $cat -DetailText $evt.Detail
+
+    $why = "The TCP connection was forcibly closed (RST) by the remote peer or a local firewall/filter (WFP)."
+    $confirm = "Correlate with 'Packet Capture' or firewall logs. If local, check for WFP filter drops (netsh wfp capture)."
+    $next = "Check firewall rules, proxy settings, and any 'Web Protection' agents (Zscaler, Netskope) that might interrupt the stream."
+
+    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; Why=$why; Confirm=$confirm; Next=$next }
+}
+
+# Detector: DLL Search Order (Generic)
+function Detect-DllSearchOrder {
+    param($evt)
+    if ($evt.Result -notmatch "NAME NOT FOUND") { return $null }
+    if ($evt.Path -notmatch "\.dll$") { return $null }
+    # Ignore safe paths/DLLs to reduce noise (e.g. system32 is normal)
+    if ($evt.Path -match "System32|SysWOW64") { return $null }
+
+    $cat = "DLL SEARCH FAIL"
+    $sev = "Low" # Only high if it never succeeds, which requires state we might not have in single-event context
+    $oracle = Oracle-Match -ProcessName $evt.Process -PathText $evt.Path -CategoryText $cat -DetailText $evt.Detail
+
+    $why = "The application is hunting for a DLL in non-standard paths. If it eventually fails to load, the app may crash or lose features."
+    $confirm = "Check if a subsequent 'Load Image' event succeeds for this DLL. If not, it is a missing dependency."
+    $next = "Verify the application installation. If it's a known component, reinstall the redistributable or app."
+
+    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; Why=$why; Confirm=$confirm; Next=$next }
+}
+
 # Detector registry (order matters: most actionable first)
 $Detectors = @(
     ${function:Detect-ProcessExitCodes},
@@ -1739,7 +1815,11 @@ $Detectors = @(
     ${function:Detect-AudioDucking},
     ${function:Detect-MfaBlock},
     ${function:Detect-OcrFail},
-    ${function:Detect-RegistryThrash}
+    ${function:Detect-RegistryThrash},
+    ${function:Detect-DeletePending},
+    ${function:Detect-ZoneIdentifier},
+    ${function:Detect-NetworkReset},
+    ${function:Detect-DllSearchOrder}
 )
 # =========================
 # 7) STREAM PARSE CSV + APPLY DETECTORS
@@ -2009,9 +2089,11 @@ foreach ($f in $FindingsSorted) {
     }
     $Rows += "<tr id='detail-$(HtmlEncode($f.Id))' class='detailRow'><td colspan='15'>" +
              "<div class='detailBox'>" +
-             "<div><b>Why it matters:</b> $(HtmlEncode($f.Why))</div>" +
-             "<div><b>How to confirm:</b> $(HtmlEncode($f.HowToConfirm))</div>" +
-             "<div><b>Next steps:</b> $(HtmlEncode($f.NextSteps))</div>" +
+             "<div class='exp-layer'><h3>1. User Experience (Symptom)</h3><div>$(HtmlEncode($f.UserExperience))</div></div>" +
+             "<div class='exp-layer'><h3>2. Technical Context (Mechanism)</h3><div>$(HtmlEncode($f.TechnicalDetail))</div></div>" +
+             "<div class='exp-layer'><h3>3. Remediation (Fix)</h3><div>$(HtmlEncode($f.Remediation))</div></div>" +
+             "<hr class='exp-divider'>" +
+             "<div><b>Original Analysis:</b> $(HtmlEncode($f.Why)) | $(HtmlEncode($f.HowToConfirm))</div>" +
              "<div><b>Image path:</b> <span class='mono'>$(HtmlEncode($f.ImagePath))</span></div>" +
              "<div><b>Command line:</b> <span class='mono'>$(HtmlEncode($f.CommandLine))</span></div>" +
              "<div class='subhead'>Evidence samples (ProcMon/Aux correlated):</div>" +
@@ -2091,7 +2173,10 @@ $Html = @"
   .controls{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:10px 0}
   .copy,.toggle{background:#223049;color:#e6edf3;border:1px solid #2a3240;border-radius:8px;padding:4px 10px;cursor:pointer}
   .detailRow{display:none}
-  .detailBox{margin:8px 0;background:#0e1116;border:1px solid #2a3240;border-radius:10px;padding:10px}
+  .detailBox{margin:8px 0;background:#0e1116;border:1px solid #2a3240;border-radius:10px;padding:15px}
+  .exp-layer{margin-bottom:12px;padding-bottom:12px;border-bottom:1px dashed #2a3240}
+  .exp-layer h3{margin:0 0 5px 0;font-size:13px;color:#9aa4af;text-transform:uppercase;letter-spacing:0.5px}
+  .exp-divider{border:0;border-top:1px solid #2a3240;margin:15px 0}
   .subhead{margin-top:10px;font-weight:700}
   .ev th{background:#0e1116;position:static}
   a{color:#93c5fd}

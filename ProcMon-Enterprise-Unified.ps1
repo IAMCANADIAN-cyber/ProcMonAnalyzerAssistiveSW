@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    ProcMon-Enterprise V1207: "Offline Oracle" (Regression-Hardened).
+    ProcMon-Enterprise V1300: "Overseer Edition" (Unified).
     PowerShell 5.1-compatible forensic engine for Assistive Technology (JAWS/ZoomText/Fusion/Dragon/NVDA)
     interoperability with enterprise security tooling, Windows components, and common line-of-business apps.
 
@@ -1028,6 +1028,8 @@ $AT_Processes = New-NameSet @(
     "natspeak.exe","dgnuiasvr.exe","dragonbar.exe","dnssps.exe","dgnsvc.exe","loggerservice.exe",
     # NVDA / Windows AT
     "nvda.exe","nvda_slave.exe","narrator.exe","magnify.exe","atbroker.exe",
+    # Other AT / AAC / Literacy
+    "dol.exe","snova.exe","accctrl.exe","cobra.exe","readandwrite.exe","rw.exe","claroread.exe","k3000.exe","tobii.eyex.engine.exe","grid 3.exe",
     # OS helpers that often appear in AT incidents
     "audiodg.exe","audiosrv.exe","tabtip.exe","wisptis.exe","dllhost.exe","fontdrvhost.exe","logonui.exe","consent.exe",
     # Common apps that AT integrates with
@@ -1038,11 +1040,20 @@ if (-not [string]::IsNullOrWhiteSpace($TargetProcess)) { [void]$AT_Processes.Add
 # --- Security / management / OS services that commonly contend ---
 # (No Sentinel L-D-K licensing checks. No Team-Viewer checks. Users can add org-specific tooling as needed.)
 $Sec_Processes = New-NameSet @(
-    "msmpeng.exe","nissrv.exe","mpsvc.dll","mpsigstub.exe","mpcmdrun.exe","smartscreen.exe",
-    "mssense.exe","sensecncproxy.exe",
-    "csfalconservice.exe","csfalconcontainer.exe",
-    "cbdefense.exe","repMgr.exe",
-    "taniumclient.exe","ccmexec.exe","wmiPrvSE.exe","searchindexer.exe",
+    # Microsoft
+    "msmpeng.exe","nissrv.exe","mpsvc.dll","mpsigstub.exe","mpcmdrun.exe","smartscreen.exe","mssense.exe","sensecncproxy.exe",
+    # EDR / AV Giants
+    "csfalconservice.exe","csfalconcontainer.exe","sentinelagent.exe","sentinelone.exe","cbdefense.exe","repmgr.exe",
+    "mcshield.exe","mfeesp.exe","ccsvchst.exe","vsserv.exe","bdagent.exe","sophosfilescanner.exe","sedservice.exe","cylancesvc.exe","cyveraservice.exe","trapsagent.exe",
+    # DLP / Insider Threat
+    "dsa.exe","epclient.exe","edpa.exe","wdpa.exe","dgagent.exe","dgservice.exe",
+    # SASE / Network
+    "zsatunnel.exe","zsaauth.exe","netskope.exe","stagent.exe","vpnagent.exe","acumbrellaagent.exe",
+    # Privilege / Virtualization
+    "vf_agent.exe","defendpoint.exe","br-service.exe","hpwolfsecurity.exe","ctxsvc.exe","appvclient.exe",
+    # Management / RMM
+    "taniumclient.exe","ccmexec.exe","wmiPrvSE.exe","searchindexer.exe","splunkd.exe","lsiagent.exe","nxtcoord.exe",
+    # System Noise
     "werfault.exe","sdbinst.exe","spoolsv.exe","compatTelRunner.exe"
 )
 

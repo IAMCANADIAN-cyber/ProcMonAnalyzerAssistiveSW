@@ -1065,10 +1065,13 @@ $Safe_DLL_Tokens = New-NameSet @(
 )
 
 # Suspicious DLL/vendor tokens (used only for classification; edit freely)
-$Suspicious_DLL_Tokens = New-NameSet @(
+$Suspicious_DLL_List = @(
     "crowdstrike","csagent","falcon","carbonblack","cb","cylance","defender","mssense","sentinel","s1","mcafee","symantec","trend",
     "zscaler","netskope","forcepoint","ivanti","citrix","vmware","horizon","thinprint"
 )
+$Suspicious_DLL_Tokens = New-NameSet $Suspicious_DLL_List
+# Pre-compile regex for performance in tight loops
+$Suspicious_DLL_Regex = "(?i)(" + ($Suspicious_DLL_List -join "|") + ")"
 
 # =========================
 # 4) AUX LOG PARSING (EVTX + TEXT LOGS + REG)
@@ -1432,8 +1435,8 @@ function Detect-HookInjection {
 
     # Flag if looks like security/VDI/hook vendor token
     $tokenHit = $null
-    foreach ($tok in $Suspicious_DLL_Tokens) {
-        if ($evt.Path.ToLowerInvariant().Contains($tok.ToLowerInvariant())) { $tokenHit = $tok; break }
+    if ($evt.Path -match $Suspicious_DLL_Regex) {
+        $tokenHit = $Matches[0]
     }
     if (-not $tokenHit) { return $null }
 
@@ -1718,8 +1721,36 @@ function Detect-TouchWar {
     return @{ Category=$cat; Severity=$sev; Oracle=$oracle; Why=$why; Confirm=$confirm; Next=$next }
 }
 
+# Detector: Browser renderer loop (Process Create spam)
+$BrowserLoopCounts = @{}
+function Detect-BrowserLoop {
+    param($evt)
+    # We track 'Process Create' where the child path is a browser exe
+    if ($evt.Operation -ne "Process Create") { return $null }
+
+    # In ProcMon, 'Process Name' is parent, 'Path' is child image
+    if ($evt.Path -match '(?i)\\((msedge|chrome|firefox|brave)\.exe)$') {
+        $childEx = $Matches[1]
+        if (-not $BrowserLoopCounts.ContainsKey($childEx)) { $BrowserLoopCounts[$childEx] = 0 }
+        $BrowserLoopCounts[$childEx]++
+
+        # Trigger on the 20th restart (arbitrary threshold for "loop")
+        if ($BrowserLoopCounts[$childEx] -eq 20) {
+            $cat = "BROWSER LOOP"
+            $sev = "High"
+            $oracle = Oracle-Match -ProcessName $evt.Process -PathText $evt.Path -CategoryText $cat -DetailText $evt.Detail
+            $why = "The browser is spawning child processes (renderers) repeatedly. This indicates a crash loop, 'Sad Tab', or incompatible injection."
+            $confirm = "Check 'Process Exit' events for $childEx to see if they are crashing with 0xC0000... codes."
+            $next = "Disable browser extensions; check for third-party security injection into the browser; try --disable-features=RendererCodeIntegrity."
+            return @{ Category=$cat; Severity=$sev; Oracle=$oracle; Why=$why; Confirm=$confirm; Next=$next }
+        }
+    }
+    return $null
+}
+
 # Detector registry (order matters: most actionable first)
 $Detectors = @(
+    ${function:Detect-BrowserLoop},
     ${function:Detect-ProcessExitCodes},
     ${function:Detect-HookInjection},
     ${function:Detect-AccessDenied},
@@ -1804,7 +1835,7 @@ function Stream-ProcMonCsv {
             $Sec_Processes.Contains($proc) -or
             ($dur -ge $SlowThresholdSeconds) -or
             ($res -match "ACCESS DENIED|SHARING VIOLATION|OPLOCK|FAST_IO|LOCK VIOLATION|REPARSE|NAME NOT FOUND|PATH NOT FOUND|BUFFER OVERFLOW|PIPE BUSY") -or
-            ($op -match "Load Image|Process Exit|Thread Profiling|TCP")
+            ($op -match "Load Image|Process Exit|Process Create|Thread Profiling|TCP")
 
         if (-not $interesting) { continue }
 

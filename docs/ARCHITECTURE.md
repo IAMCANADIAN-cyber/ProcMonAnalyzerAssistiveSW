@@ -1,14 +1,13 @@
 # 🏗️ System Architecture & Logic Flow
 
 ## 1. The Streaming Pipeline Strategy
-To analyze gigabyte-scale logs without RAM exhaustion, the engine uses a specific pipeline architecture:
+To analyze gigabyte-scale logs without RAM exhaustion, the engine uses a specific pipeline architecture based on `Microsoft.VisualBasic.FileIO.TextFieldParser`. This allows processing CSVs line-by-line with minimal memory footprint.
 
-`Import-Csv (Stream) -> [Sliding Window Buffer] -> [Heuristic Analysis] -> [Findings Accumulator] -> Flush`
+`StreamReader -> TextFieldParser -> [Stateful Analysis] -> [Findings Accumulator]`
 
-### The "Edge Case" Problem
-A race condition might begin at the end of Batch N and conclude at the start of Batch N+1.
-* **Solution:** The script maintains an `$EdgeBuffer` containing the last **2.0 seconds** of events from the previous batch.
-* **Constraint:** Any modification to the looping logic must preserve this buffer, or detection of split-events will regress.
+### State Management
+Instead of batching, the engine processes events continuously.
+* **Global Suspect Buffer:** Tracks the last time a Security Process touched a file. This state is preserved across the stream to detect "Touch-then-Deny" race conditions (contention) regardless of where they occur in the file.
 
 ## 2. The Global Suspect Buffer (GSB)
 The GSB is a `Dictionary<FilePath, EventObject>` representing the "Security State" of the system.

@@ -243,7 +243,7 @@ function Get-OracleTargets {
         @{ name="Windows 10 22H2 release health"; url="https://learn.microsoft.com/en-us/windows/release-health/status-windows-10-22h2"; type="mslearn_known_issues"; product="Windows 10 22H2"; cache_file="win10_22h2_release_health.html" },
         @{ name="Office known issues"; url="https://learn.microsoft.com/en-us/officeupdates/known-issues"; type="mslearn_office_known_issues"; product="Microsoft 365 Apps / Office"; cache_file="office_known_issues.html" },
         @{ name="Office Current Channel release notes"; url="https://learn.microsoft.com/en-us/officeupdates/current-channel"; type="mslearn_release_notes"; product="Microsoft 365 Apps Current Channel"; cache_file="office_current_channel.html" },
-        @{ name="JAWS What's New"; url="https://support.freedomscientific.com/downloads/jaws/JAWSWhatsNew"; type="fs_whatsnew"; product="JAWS"; cache_file="jaws_whats_new.html" }
+        @{ name="JAWS What's New"; url="https://support.freedomscientific.com/downloads/jaws/JAWSWhatsNew"; type="jaws_saved"; product="JAWS"; cache_file="jaws_whats_new.html" }
     )
 }
 
@@ -337,6 +337,7 @@ function Get-OracleCacheItems {
             elseif ($name -eq 'office_current_channel.html') { $type = "office_current_channel" }
             elseif ($name -eq 'changewindows_timeline_pc.html') { $type = "changewindows_timeline" }
             elseif ($name -eq 'system_error_code_lookup_tool.html') { $type = "ms_error_lookup_doc" }
+            elseif ($name -eq 'jaws_whats_new.html') { $type = "jaws_saved" }
             $items += @{ file=$p; type=$type; name=$name }
         }
     }
@@ -3078,7 +3079,6 @@ function Detect-KnownScenarios {
 }
 
 $Detectors = @(
-    ${function:Detect-KnownScenarios},
     ${function:Detect-KnownScenarios},
     ${function:Detect-BrowserLoop},
     ${function:Detect-ProcessExitCodes},

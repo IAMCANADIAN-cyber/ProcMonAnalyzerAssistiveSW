@@ -1705,6 +1705,21 @@ $StartScenarios = @(
     @{ Id='1471'; Title="Profile RefCount:"; Op="RegQueryValue"; Res=""; Lookup=""; Path="ProfileList.*RefCount"; Cause="Checking profile usage count. Non-zero at logoff indicates stuck profile." },
     @{ Id='1477'; Title="OneDrive Redirection:"; Op="RegQueryValue"; Res=""; Lookup=""; Path="User Shell Folders.*OneDrive"; Cause="Known Folders (Docs/Desktop) pointed to OneDrive." },
 
+    # Section 58: Security Products Fighting
+    @{ Id='1111'; Title="Filter Stack Saturation:"; Op=""; Res=""; Lookup="fltmgr"; Path=""; Cause="File System Filter Manager shows 5+ active filters. High latency/instability risk." },
+    @{ Id='1114'; Title="AV Scan Loop:"; Op="ReadFile"; Res="SUCCESS"; Lookup="AV Scan"; Path="*.log"; Cause="Antivirus A scanning Antivirus B's log file. Recursive disk I/O." },
+    @{ Id='1117'; Title="Security File Lock:"; Op="CreateFile"; Res="SHARING VIOLATION"; Lookup="AV Lock"; Path="Update"; Cause="AV A locking file during AV B update." },
+    @{ Id='1120'; Title="Overlay War:"; Op="Load Image"; Res=""; Lookup="Overlay"; Path=""; Cause="Multiple overlay tools (Discord, Steam, Nvidia) fighting for hooks." },
+
+    # Section 137: Overlay Wars
+    @{ Id='1461'; Title="Discord Overlay Crash:"; Op="Load Image"; Res="SUCCESS"; Lookup="DiscordHook64.dll"; Path="DiscordHook64.dll"; Cause="Discord overlay fighting with game/app anti-cheat or hooks." },
+    @{ Id='1462'; Title="FPS Counter Injection:"; Op="Load Image"; Res="SUCCESS"; Lookup="RTSSHooks.dll"; Path="RTSSHooks.dll"; Cause="RivaTuner Statistics Server injecting into non-game process." },
+    @{ Id='1463'; Title="Clipboard Manager Conflict:"; Op="OpenClipboard"; Res="ACCESS DENIED"; Lookup="Clipboard"; Path=""; Cause="Clipboard history tool polling too aggressively." },
+    @{ Id='1465'; Title="RGB Driver Leak:"; Op=""; Res=""; Lookup="LightingService.exe"; Path=""; Cause="RGB controller driver (ASUS/Corsair) leaking memory." },
+    @{ Id='1466'; Title="Virtual Camera Black Screen:"; Op=""; Res=""; Lookup="OBS Virtual Camera"; Path=""; Cause="OBS Virtual Camera selected as default but OBS is not running." },
+    @{ Id='1469'; Title="Shell Extension Crash:"; Op="Process Exit"; Res=""; Lookup="Explorer"; Path=""; Cause="Buggy context menu extension caused Explorer crash." },
+    @{ Id='1470'; Title="Focus Assist Duplication:"; Op=""; Res=""; Lookup="Focus Assist"; Path=""; Cause="Focus Assist enabled because of phantom second monitor (Duplication mode)." },
+
 )
 
 
@@ -2020,6 +2035,32 @@ function Detect-AccessDenied {
     $why = "An Access Denied in a critical path can break AT hooks, UIA/MSAA bridging, add-ins, or profile/app state."
     $confirm = "Look for repeats of the same denied Path, and whether the denying actor is a minifilter/security process (check concurrent activity)."
     $next = "Confirm ACL/ownership, AppLocker/WDAC, ASR/Defender CFA, and any EDR file/registry protection. Capture a second ProcMon with stacks enabled for the denied operation."
+
+    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; Why=$why; Confirm=$confirm; Next=$next }
+}
+
+# Detector: Gaming/Utility Overlay Injection
+function Detect-OverlayInjection {
+    param($evt)
+    if ($evt.Operation -ne "Load Image") { return $null }
+
+    # Target Processes: Office, Teams, Browsers, AT
+    $isBusinessApp = ($evt.Process -match '(?i)(WINWORD|EXCEL|POWERPNT|OUTLOOK|Teams|ms-teams|Zoom|fs|jfw|narrator|nvda)\.exe')
+    if (-not $isBusinessApp) { return $null }
+
+    # Overlay DLLs: Discord, Steam, RivaTuner, Nvidia Share, Overwolf
+    $isOverlay = ($evt.Path -match '(?i)DiscordHook|GameOverlayRenderer|RTSSHooks|nvspcap|ow-client|OWClient|vulcan_steam')
+
+    if (-not $isOverlay) { return $null }
+
+    $cat = "OVERLAY INJECTION"
+    $sev = "Medium"
+
+    $oracle = Oracle-Match -ProcessName $evt.Process -PathText $evt.Path -CategoryText $cat -DetailText $evt.Detail
+
+    $why = "A gaming or utility overlay ($($evt.Path)) has injected itself into a business application ($($evt.Process)). This frequently causes rendering crashes or white screens."
+    $confirm = "Check if the application crashes when the overlay is enabled. Disable the overlay in Discord/Steam settings."
+    $next = "Disable 'In-Game Overlay' in Discord/Steam/GeForce Experience. Add the business application to the overlay's blocklist."
 
     return @{ Category=$cat; Severity=$sev; Oracle=$oracle; Why=$why; Confirm=$confirm; Next=$next }
 }
@@ -2503,7 +2544,7 @@ function Detect-NetFailover {
 
 $Detectors = @(
     ${function:Detect-KnownScenarios},
-    ${function:Detect-KnownScenarios},
+    ${function:Detect-OverlayInjection},
     ${function:Detect-BrowserLoop},
     ${function:Detect-ProcessExitCodes},
     ${function:Detect-HookInjection},
@@ -2624,6 +2665,20 @@ function Stream-ProcMonCsv {
         # --- SECURITY CONTENTION LOGIC (V1300) ---
         # Update GlobalSuspectBuffer if this is a Security Process touching a path
         if ($Sec_Processes.Contains($proc)) {
+             # Check for SECURITY FRATRICIDE (Security vs Security) before updating the buffer
+             if ($GlobalSuspectBuffer.ContainsKey($p)) {
+                 $LastSuspect = $GlobalSuspectBuffer[$p]
+                 # If a DIFFERENT security agent touched this recently (< 100ms), they are fighting.
+                 if ($LastSuspect.Proc -ne $proc -and [Math]::Abs(($tod - $LastSuspect.Time).TotalSeconds) -le 0.1) {
+                     $cat="SECURITY FRATRICIDE"
+                     $sev="High"
+                     $why="Multiple security agents ($($LastSuspect.Proc) vs $proc) are contending for the same file simultaneously."
+                     $confirm="Check active filter drivers 'fltmc filters'. Defender and 3rd party AV should not scan the same paths."
+                     $next="Configure mutual exclusions or remove one of the conflicting agents."
+
+                     Add-Finding -Category $cat -Severity $sev -Process $proc -PID $pid -TID $tid -User $usr -ImagePath $img -CommandLine $cmd -Operation $op -Path $p -Result $res -Detail ("$($LastSuspect.Proc) <-> $proc") -Time $tod -Duration $dur -Why $why -HowToConfirm $confirm -NextSteps $next -Oracle $null | Out-Null
+                 }
+             }
              $GlobalSuspectBuffer[$p] = [PSCustomObject]@{ Time=$tod; Proc=$proc; Path=$p }
         }
 

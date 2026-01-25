@@ -207,8 +207,11 @@ function Read-OracleDb {
     param([string]$DbPath)
     try {
         if (-not (Test-Path -LiteralPath $DbPath)) { return $null }
-        return (Get-Content -LiteralPath $DbPath -Raw -Encoding UTF8 | ConvertFrom-Json)
-    } catch { return $null }
+        return (Get-Content -LiteralPath $DbPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop)
+    } catch {
+        Write-Warning "Failed to parse Oracle DB '$DbPath': $_"
+        return $null
+    }
 }
 
 function Write-OracleDb {
@@ -1882,16 +1885,26 @@ function Normalize-ProcName {
 # Read header via TextFieldParser for correctness
 function Get-CsvHeaders {
     param([string]$CsvPath)
-    $parser = New-Object Microsoft.VisualBasic.FileIO.TextFieldParser($CsvPath)
-    $parser.SetDelimiters(",")
-    $parser.HasFieldsEnclosedInQuotes = $true
-    $parser.TrimWhiteSpace = $true
-    $headers = $parser.ReadFields()
-    $parser.Close()
-    return $headers
+    try {
+        $parser = New-Object Microsoft.VisualBasic.FileIO.TextFieldParser($CsvPath)
+        $parser.SetDelimiters(",")
+        $parser.HasFieldsEnclosedInQuotes = $true
+        $parser.TrimWhiteSpace = $true
+        $headers = $parser.ReadFields()
+        $parser.Close()
+        return $headers
+    } catch {
+        Write-Error "Failed to read CSV headers from '$CsvPath': $_"
+        return $null
+    }
 }
 
 $Headers = Get-CsvHeaders -CsvPath $PrimaryCsv.FullName
+if (-not $Headers) {
+    Write-Error "Could not read headers from primary CSV. Aborting."
+    return
+}
+
 $Resolved = @{}
 foreach ($std in $StandardFieldMap.Keys) {
     $Resolved[$std] = Resolve-HeaderName -Headers $Headers -Standard $std
@@ -2538,17 +2551,34 @@ $GlobalSuspectBuffer = [System.Collections.Generic.Dictionary[string, PSObject]]
 function Stream-ProcMonCsv {
     param([string]$CsvPath)
 
-    $parser = New-Object Microsoft.VisualBasic.FileIO.TextFieldParser($CsvPath)
-    $parser.SetDelimiters(",")
-    $parser.HasFieldsEnclosedInQuotes = $true
-    $parser.TrimWhiteSpace = $true
+    try {
+        $parser = New-Object Microsoft.VisualBasic.FileIO.TextFieldParser($CsvPath)
+        $parser.SetDelimiters(",")
+        $parser.HasFieldsEnclosedInQuotes = $true
+        $parser.TrimWhiteSpace = $true
+    } catch {
+        Write-Error "Failed to open CSV '$CsvPath': $_"
+        return
+    }
 
-    # header row
-    [void]$parser.ReadFields()
+    try {
+        # header row
+        $null = $parser.ReadFields()
+    } catch {
+        Write-Error "Failed to read header from '$CsvPath': $_"
+        $parser.Close()
+        return
+    }
 
     $i = 0
     while (-not $parser.EndOfData) {
-        $fields = $parser.ReadFields()
+        try {
+            $fields = $parser.ReadFields()
+        } catch {
+            Write-Warning "Skipping malformed line in '$CsvPath': $_"
+            continue
+        }
+
         $i++
         if (-not $fields) { continue }
 

@@ -59,7 +59,10 @@ param(
     [switch]$AnalyzeAllCsv,
     [int]$ValidationPasses = 7,
     [int]$MaxFindingsPerCategory = 250,
-    [int]$MaxEvidenceSamplesPerFinding = 6
+    [int]$MaxEvidenceSamplesPerFinding = 6,
+
+    [switch]$InteractiveInput,
+    [string]$CustomListPath = ""
 )
 
 # =========================
@@ -941,7 +944,7 @@ $ArtifactGlobs = @(
     "*.evtx",
     "*.dmp", "*.mdmp",
     "*.etl",
-    "*.txt", "*.log", "*.out",
+    "*.txt", "*.log", "*.out", "*.log*", "*.err", "*.trace",
     "*.nfo",
     "*.wer", "*.wermeta", "*.werinternalmetadata.xml",
     "*.reg",
@@ -1008,6 +1011,43 @@ $WerFiles = $AllArtifacts | Where-Object { $_.Name -match '^(Report\.wer|.*\.wer
 #   You WILL edit these lists over time and may paste duplicates.
 #   This script normalizes/dedupes them case-insensitively and ignores blanks.
 
+function Show-InputDialog {
+    try {
+        Add-Type -AssemblyName System.Windows.Forms
+        Add-Type -AssemblyName System.Drawing
+        $form = New-Object System.Windows.Forms.Form
+        $form.Text = "Paste Custom Security Processes/DLLs"
+        $form.Size = New-Object System.Drawing.Size(600,400)
+        $form.StartPosition = "CenterScreen"
+
+        $label = New-Object System.Windows.Forms.Label
+        $label.Text = "Paste names (one per line). Duplicates will be handled."
+        $label.Dock = "Top"
+        $form.Controls.Add($label)
+
+        $textBox = New-Object System.Windows.Forms.TextBox
+        $textBox.Multiline = $true
+        $textBox.ScrollBars = "Vertical"
+        $textBox.Dock = "Fill"
+        $form.Controls.Add($textBox)
+
+        $okBtn = New-Object System.Windows.Forms.Button
+        $okBtn.Text = "OK"
+        $okBtn.Dock = "Bottom"
+        $okBtn.DialogResult = [System.Windows.Forms.DialogResult]::OK
+        $form.Controls.Add($okBtn)
+
+        $form.AcceptButton = $okBtn
+
+        if ($form.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+            return $textBox.Text
+        }
+    } catch {
+        Write-Warning "GUI unavailable or failed to load System.Windows.Forms. Cannot show popup."
+    }
+    return ""
+}
+
 function New-NameSet {
     param([string[]]$Items)
     $set = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
@@ -1042,9 +1082,18 @@ if (-not [string]::IsNullOrWhiteSpace($TargetProcess)) { [void]$AT_Processes.Add
 $Sec_Processes = New-NameSet @(
     # Microsoft
     "msmpeng.exe","nissrv.exe","mpsvc.dll","mpsigstub.exe","mpcmdrun.exe","smartscreen.exe","mssense.exe","sensecncproxy.exe",
-    # EDR / AV Giants
-    "csfalconservice.exe","csfalconcontainer.exe","sentinelagent.exe","sentinelone.exe","cbdefense.exe","repmgr.exe",
-    "mcshield.exe","mfeesp.exe","ccsvchst.exe","vsserv.exe","bdagent.exe","sophosfilescanner.exe","sedservice.exe","cylancesvc.exe","cyveraservice.exe","trapsagent.exe",
+    # EDR / AV Giants (Expanded)
+    "csfalconservice.exe","csfalconcontainer.exe","falcon.exe",
+    "sentinelagent.exe","sentinelone.exe","sentinelagentworker.exe","sentinelservice.exe",
+    "cbdefense.exe","cbdefensewsc.exe","repmgr.exe","cb.exe",
+    "mcshield.exe","mfeesp.exe","mfevtsvc.exe","mfemms.exe",
+    "ccsvchst.exe","vsserv.exe","bdagent.exe","smc.exe",
+    "sophosfilescanner.exe","sophoshealth.exe","savservice.exe","sedservice.exe",
+    "cylancesvc.exe","cylanceui.exe",
+    "cyveraservice.exe","trapsagent.exe",
+    "tmproxy.exe","ntrtscan.exe","pccntmon.exe",
+    "sysmon.exe","sysmon64.exe",
+    "aexnsagent.exe",
     # DLP / Insider Threat
     "dsa.exe","epclient.exe","edpa.exe","wdpa.exe","dgagent.exe","dgservice.exe",
     # SASE / Network
@@ -1053,6 +1102,7 @@ $Sec_Processes = New-NameSet @(
     "vf_agent.exe","defendpoint.exe","br-service.exe","hpwolfsecurity.exe","ctxsvc.exe","appvclient.exe",
     # Management / RMM
     "taniumclient.exe","ccmexec.exe","wmiPrvSE.exe","searchindexer.exe","splunkd.exe","lsiagent.exe","nxtcoord.exe",
+    "qualysagent.exe","ir_agent.exe",
     # System Noise
     "werfault.exe","sdbinst.exe","spoolsv.exe","compatTelRunner.exe"
 )
@@ -1067,11 +1117,48 @@ $Safe_DLL_Tokens = New-NameSet @(
 # Suspicious DLL/vendor tokens (used only for classification; edit freely)
 $Suspicious_DLL_List = @(
     "crowdstrike","csagent","falcon","carbonblack","cb","cylance","defender","mssense","sentinel","s1","mcafee","symantec","trend",
-    "zscaler","netskope","forcepoint","ivanti","citrix","vmware","horizon","thinprint"
+    "zscaler","netskope","forcepoint","ivanti","citrix","vmware","horizon","thinprint",
+    "sophos","trellix","qualys","tanium","paloalto","traps","cortex","darktrace"
 )
 $Suspicious_DLL_Tokens = New-NameSet $Suspicious_DLL_List
 # Pre-compile regex for performance in tight loops
 $Suspicious_DLL_Regex = "(?i)(" + ($Suspicious_DLL_List -join "|") + ")"
+
+# --- User Input Integration ---
+$CustomItems = @()
+if ($InteractiveInput) {
+    Write-Host "[?] Opening input dialog..." -ForegroundColor Yellow
+    $txt = Show-InputDialog
+    if (-not [string]::IsNullOrWhiteSpace($txt)) {
+        $CustomItems += ($txt -split "`r?`n")
+    }
+}
+if (-not [string]::IsNullOrWhiteSpace($CustomListPath) -and (Test-Path -LiteralPath $CustomListPath)) {
+    try {
+        $CustomItems += Get-Content -LiteralPath $CustomListPath
+    } catch {
+        Write-Error "Failed to read custom list: $CustomListPath"
+    }
+}
+
+if ($CustomItems.Count -gt 0) {
+    Write-Host "[+] Processing $($CustomItems.Count) custom security/watch items..." -ForegroundColor Cyan
+    foreach ($item in $CustomItems) {
+        if ([string]::IsNullOrWhiteSpace($item)) { continue }
+        $clean = $item.Trim()
+        # Add to Security Processes (for Contention detection)
+        if ($clean -match '\.exe$') {
+            [void]$Sec_Processes.Add($clean)
+        }
+        # Add to Suspicious Tokens (for DLL injection classification)
+        else {
+            [void]$Suspicious_DLL_Tokens.Add($clean)
+            $Suspicious_DLL_List += $clean # append for regex rebuild
+        }
+    }
+    # Rebuild Regex with new tokens
+    $Suspicious_DLL_Regex = "(?i)(" + ($Suspicious_DLL_List -join "|") + ")"
+}
 
 # =========================
 # 2b) IMPORTED SCENARIOS
@@ -1764,7 +1851,13 @@ $TextPatterns = @(
     "(?i)\bui automation\b|\buia\b",
     "(?i)\boleacc\b|\bmsaa\b",
     "(?i)\bcom\b.*\bclass not registered\b",
-    "(?i)\berror\b"
+    "(?i)\berror\b",
+    "(?i)\bblocked\b",
+    "(?i)\bquarantined\b",
+    "(?i)\btamper\b",
+    "(?i)\bthreat\b",
+    "(?i)\bexploit\b",
+    "(?i)\bpolicy\sviolation\b"
 )
 
 foreach ($t in ($TextLogFiles | Select-Object -First 350)) {

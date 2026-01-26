@@ -11,6 +11,7 @@ This "Overseer" edition consolidates previous logic into a single, robust script
 *   **Stateful Detection Engine**:
     *   **Global Suspect Buffer (GSB)**: Detects "Security Fratricide" where security tools scan/lock files immediately before an AT process is denied access.
     *   **Throttling Detection**: Identifies IPv6 failover latency, registry thrashing, and browser restart loops.
+*   **Expanded Security Awareness**: Built-in recognition for modern enterprise agents including CrowdStrike, SentinelOne, Carbon Black, Trellix, Netskope, Zscaler, Cortex XDR, and more.
 *   **"Do The Work" Reporting**: Generates a self-contained HTML report with prioritized next steps, glossary, and evidence correlation.
 
 ## Prerequisites
@@ -82,6 +83,8 @@ If you have brought in a new `OracleCache` folder, update the local JSON databas
 *   `-AnalyzeAllCsv`: If multiple CSVs are found in the folder, analyze *all* of them (default is only the largest).
 *   `-TargetProcess "myapp.exe"`: Explicitly treat `myapp.exe` as a target for latency/contention analysis.
 *   `-SlowThresholdSeconds 0.5`: Adjust the threshold for "High Latency" flagging (default: 0.5s).
+*   `-InteractiveInput`: Opens a dialog box (GUI) allowing you to paste a list of custom security processes or DLLs to watch for.
+*   `-CustomListPath "C:\list.txt"`: Loads a list of custom security processes/DLLs from a text file (one per line).
 
 ## Output
 The script generates:
@@ -99,4 +102,5 @@ The engine uses a streaming pipeline (`TextFieldParser`) to handle gigabyte-scal
 ## Troubleshooting
 *   **"Header normalization: could not reliably locate..."**: Your ProcMon CSV is missing required columns. Check the **Prerequisites** section.
 *   **Execution Policy**: You may need to run `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` to allow the script to run.
+*   **"GUI unavailable..."**: If running in a headless environment (Core/Remote), `-InteractiveInput` will fail gracefully. Use `-CustomListPath` instead.
 

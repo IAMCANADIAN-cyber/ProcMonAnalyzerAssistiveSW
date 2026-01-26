@@ -2562,7 +2562,6 @@ function Stream-ProcMonCsv {
         function GetField([string]$stdName) {
             $hn = $Resolved[$stdName]
             if (-not $hn) { return "" }
-            if (-not $hn) { return "" }
             if (-not $HeaderIndex.ContainsKey($hn)) { return "" }
             $idx = [int]$HeaderIndex[$hn]
             if ($idx -ge 0 -and $idx -lt $fields.Count) { return $fields[$idx] } else { return "" }

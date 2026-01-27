@@ -2569,6 +2569,52 @@ function Detect-KnownScenarios {
 }
 
 
+# Detector: Packet Storm / Network Flood
+$NetworkRateByProc = @{}
+function Detect-PacketStorm {
+    param($evt)
+    if ($evt.Operation -notmatch 'TCP|UDP') { return $null }
+
+    # Bucket by Process + Second
+    $bucket = [int][Math]::Floor($evt.Time.TotalSeconds)
+    $key = ("{0}|{1}" -f $evt.Process, $bucket).ToLowerInvariant()
+
+    if (-not $NetworkRateByProc.ContainsKey($key)) { $NetworkRateByProc[$key] = 0 }
+    $NetworkRateByProc[$key]++
+
+    # Trigger if > 500 packets/sec
+    if ($NetworkRateByProc[$key] -eq 500) {
+        $cat = "PACKET STORM"
+        $sev = "High"
+        $oracle = Oracle-Match -ProcessName $evt.Process -PathText $evt.Path -CategoryText $cat -DetailText $evt.Detail
+
+        $ux = "Network connectivity drops intermittently or becomes sluggish."
+        $tc = "Process '$($evt.Process)' is generating excessive network traffic (>500 ops/sec). This could be a broadcast storm, a denial-of-service condition, or a bug in a network agent."
+        $rm = "1. Use Wireshark to analyze the traffic content. 2. Check for 'UDP Flood' or 'Broadcast Storm' patterns. 3. Isolate the machine from the network to prevent propagation."
+
+        return @{ Category=$cat; Severity=$sev; Oracle=$oracle; UserExperience=$ux; TechnicalContext=$tc; Remediation=$rm }
+    }
+    return $null
+}
+
+# Detector: Font Blocking (Untrusted Font Mitigation)
+function Detect-FontBlocking {
+    param($evt)
+    # Check for MitigationPolicy event with BlockUntrustedFonts detail
+    if ($evt.Path -match 'MitigationPolicy' -or $evt.Detail -match 'BlockUntrustedFonts') {
+        $cat = "FONT BLOCKING"
+        $sev = "Medium"
+        $oracle = Oracle-Match -ProcessName $evt.Process -PathText $evt.Path -CategoryText $cat -DetailText $evt.Detail
+
+        $ux = "Fonts appear as rectangles or generic substitutions."
+        $tc = "The application encountered a 'MitigationPolicy' event related to 'BlockUntrustedFonts'. This security feature prevents GDI from loading non-system fonts, which breaks many legacy apps."
+        $rm = "1. Disable the 'Untrusted Font Blocking' Group Policy (Computer Configuration > Administrative Templates > System > Mitigation Options). 2. Whitelist the application executable."
+
+        return @{ Category=$cat; Severity=$sev; Oracle=$oracle; UserExperience=$ux; TechnicalContext=$tc; Remediation=$rm }
+    }
+    return $null
+}
+
 # Detector: IPv6 -> IPv4 Failover Latency
 $NetFailoverState = @{}
 function Detect-NetFailover {
@@ -2634,7 +2680,9 @@ $Detectors = @(
     ${function:Detect-MfaBlock},
     ${function:Detect-OcrFail},
     ${function:Detect-RegistryThrash},
-    ${function:Detect-NetFailover}
+    ${function:Detect-NetFailover},
+    ${function:Detect-FontBlocking},
+    ${function:Detect-PacketStorm}
 )
 # =========================
 # 7) STREAM PARSE CSV + APPLY DETECTORS

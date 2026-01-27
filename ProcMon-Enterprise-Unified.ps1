@@ -1728,6 +1728,22 @@ $StartScenarios = @(
     @{ Id='1499'; Title="OOBE Complete Flag"; Op=""; Res=""; Lookup=""; Path="OOBEComplete registry mismatch"; Cause="Search Indexer waits for Out-Of-Box-Experience to finish." },
     @{ Id='1500'; Title="Null Window Class"; Op=""; Res=""; Lookup=""; Path="CreateWindow with NULL class"; Cause="Race condition in shell extension initialization." },
 
+    # --- Generated Scenarios 1211+ ---
+    @{ Id='1211'; Title="Quorum Arbitration Loss"; Process="clussvc\.exe"; Op=""; Res="STATUS_IO_TIMEOUT|STATUS_DEVICE_BUSY"; Lookup=""; Path="Quorum|Witness"; Cause="SAN latency causing the node to lose its reservation on the disk." },
+    @{ Id='1212'; Title="Cluster CSV Redirected Access"; Process="System"; Op="ReadFile"; Res=""; Lookup=""; Path="C:\\ClusterStorage"; Cause="High volume of SMB Loopback traffic indicating Cluster Shared Volume is in Redirected Mode (Metadata node corruption/backup lock)." },
+    @{ Id='1213'; Title="Cluster DB Registry Lock"; Process="clussvc\.exe"; Op=""; Res="SHARING_VIOLATION"; Lookup="SHARING_VIOLATION"; Path="HKLM\\Cluster"; Cause="Backup software or AV scanning the Cluster Hive (CLUSDB) while the service tries to update state." },
+    @{ Id='1216'; Title="Witness Share Access Denied"; Process="clussvc\.exe"; Op="CreateFile"; Res="ACCESS_DENIED"; Lookup="ACCESS_DENIED"; Path="\\\\.*\\.*"; Cause="Cluster Service cannot access File Share Witness. Verify 'ClusterName$' computer account permissions." },
+    @{ Id='1218'; Title="VHDX Snapshot Merge Lock"; Process="vmms\.exe"; Op=""; Res="ACCESS_DENIED"; Lookup="ACCESS_DENIED"; Path=".*\.avhdx"; Cause="Backup software (Veeam/Commvault) still holding a lock on the snapshot file after backup completion." },
+    @{ Id='1221'; Title="Pass-Through Disk Offline"; Process="vmms\.exe"; Op=""; Res="STATUS_DEVICE_OFF_LINE"; Lookup="STATUS_DEVICE_OFF_LINE"; Path="\\\\.\\PhysicalDrive.*"; Cause="The host OS unexpectedly claimed the LUN intended for the guest (check Disk Management)." },
+    @{ Id='1222'; Title="Virtual Machine Worker Process Crash"; Process="vmwp\.exe"; Op="Process Exit"; Res=""; Lookup=""; Path=""; Cause="VM Worker Process crashed (0xC0000005). Check Video Driver or Host RAM health." },
+    @{ Id='1225'; Title="Intune OMA-DM Sync Fail"; Process="Omadmclient\.exe"; Op="Process Exit"; Res=""; Lookup=""; Path=""; Cause="Exit code 0x80072ee2 indicates Network Timeout to Microsoft MDM endpoints." },
+    @{ Id='1237'; Title="IIS Compression Directory Lock"; Process="w3wp\.exe"; Op=""; Res="ACCESS_DENIED"; Lookup="ACCESS_DENIED"; Path="IIS Temporary Compressed Files"; Cause="IIS Worker cannot write to compression cache. Permissions broken on inetpub temp folder." },
+    @{ Id='1241'; Title="DNS Negative Cache"; Op=""; Res="NAME_NOT_FOUND"; Lookup="NAME_NOT_FOUND"; Path=""; Cause="Fast failure indicates Windows 'Negative Cache' is holding a failure result. Run 'ipconfig /flushdns'." },
+    @{ Id='1242'; Title="LLMNR Broadcast Storm"; Op="UDP Send"; Res=""; Lookup=""; Path="224\.0\.0\.252|.*:5355"; Cause="Excessive LLMNR broadcasts indicate DNS failure; clients failing over to multicast discovery." },
+    @{ Id='1244'; Title="ApiSetSchema Mapping Fail"; Op="LoadImage"; Res="NAME_NOT_FOUND|PATH_NOT_FOUND"; Lookup=""; Path="api-ms-win-crt-runtime.*"; Cause="Missing Universal C Runtime (KB2999226). Install the update." },
+    @{ Id='1254'; Title="WMI Event Consumer Persistence"; Process="scrcons\.exe"; Op="Process Create"; Res=""; Lookup=""; Path="cmd\.exe|powershell\.exe"; Cause="WMI Script Host spawning shell. High indicator of fileless malware persistence." },
+    @{ Id='1259'; Title="OneDrive Office Lock"; Process="OneDrive\.exe"; Op=""; Res="SHARING_VIOLATION"; Lookup="SHARING_VIOLATION"; Path=""; Cause="OneDrive cannot upload file because OfficeClickToRun.exe has an exclusive handle." },
+    @{ Id='1260'; Title="Dropbox Permissions Rot"; Process="Dropbox\.exe"; Op=""; Res="ACCESS_DENIED"; Lookup="ACCESS_DENIED"; Path="\.dropbox\.cache"; Cause="Dropbox cannot access its own cache. Fix permissions or reinstall." },
 )
 
 
@@ -2530,6 +2546,7 @@ function Detect-KnownScenarios {
         if ($s.Op -and $evt.Operation -notmatch $s.Op) { continue }
         if ($s.Res -and $evt.Result -notmatch $s.Res) { continue }
         if ($s.Path -and $evt.Path -notmatch $s.Path) { continue }
+        if ($s.Process -and ($null -eq $evt.Process -or $evt.Process -notmatch $s.Process)) { continue }
 
         # Match found!
         $cat = "KNOWN SCENARIO"

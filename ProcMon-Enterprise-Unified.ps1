@@ -1927,12 +1927,32 @@ function Add-Finding {
         [string]$Detail,
         [TimeSpan]$Time,
         [double]$Duration,
-        [string]$Why,
-        [string]$HowToConfirm,
-        [string]$NextSteps,
+
+        # Legacy mapping parameters (kept for backward compat during refactor)
+        [string]$Why = "",
+        [string]$HowToConfirm = "",
+        [string]$NextSteps = "",
+
+        # New 3-Layer Model
+        [string]$UserExperience = "",
+        [string]$TechnicalContext = "",
+        [string]$Remediation = "",
+
+        # Chain of Custody
+        [string]$SourceFile = "",
+        [long]$SourceLine = 0,
+
         [hashtable]$Oracle = $null
     )
     if ($Findings.Count -ge 5000) { return } # safety cap
+
+    # Map legacy fields if new ones are empty
+    if ([string]::IsNullOrWhiteSpace($UserExperience) -and [string]::IsNullOrWhiteSpace($TechnicalContext)) {
+        # Fallback for detectors not yet updated
+        $UserExperience = "Issue detected in category: $Category"
+        $TechnicalContext = "$Why `n`nConfirmation: $HowToConfirm"
+        $Remediation = $NextSteps
+    }
 
     $id = [Guid]::NewGuid().ToString()
     $obj = [PSCustomObject]@{
@@ -1951,9 +1971,16 @@ function Add-Finding {
         Result=$Result
         Detail=$Detail
         DurationSeconds=$Duration
-        Why=$Why
-        HowToConfirm=$HowToConfirm
-        NextSteps=$NextSteps
+
+        # 3-Layer Model
+        UserExperience=$UserExperience
+        TechnicalContext=$TechnicalContext
+        Remediation=$Remediation
+
+        # Chain of Custody
+        SourceFile=$SourceFile
+        SourceLine=$SourceLine
+
         OracleTitle= if($Oracle){$Oracle.title}else{""}
         OracleFix= if($Oracle){$Oracle.fix}else{""}
         OracleUrl= if($Oracle){$Oracle.url}else{""}
@@ -2017,11 +2044,11 @@ function Detect-AccessDenied {
 
     $oracle = Oracle-Match -ProcessName $proc -PathText $evt.Path -CategoryText $cat -DetailText $evt.Detail
 
-    $why = "An Access Denied in a critical path can break AT hooks, UIA/MSAA bridging, add-ins, or profile/app state."
-    $confirm = "Look for repeats of the same denied Path, and whether the denying actor is a minifilter/security process (check concurrent activity)."
-    $next = "Confirm ACL/ownership, AppLocker/WDAC, ASR/Defender CFA, and any EDR file/registry protection. Capture a second ProcMon with stacks enabled for the denied operation."
+    $ux = "The application may crash, show an 'Access Denied' error, or fail to save/load data."
+    $tc = "Process '$proc' attempted operation '$($evt.Operation)' on '$($evt.Path)' but was blocked by the OS kernel (Result: ACCESS DENIED). This usually indicates insufficient NTFS permissions, a Read-Only attribute, or blockage by security software (Anti-Virus/DLP)."
+    $rm = "1. Check NTFS permissions (ACLs) for the user account. 2. Verify if the file has the 'Read-only' attribute set. 3. Investigate if Anti-Virus/EDR is blocking this specific path."
 
-    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; Why=$why; Confirm=$confirm; Next=$next }
+    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; UserExperience=$ux; TechnicalContext=$tc; Remediation=$rm }
 }
 
 # Detector: Sharing violation / oplock / fast I/O fallback
@@ -2031,10 +2058,12 @@ function Detect-OplockFastIo {
     $cat = "OPLOCK/FASTIO"
     $sev = if ($AT_Processes.Contains($evt.Process)) { "High" } else { "Medium" }
     $oracle = Oracle-Match -ProcessName $evt.Process -PathText $evt.Path -CategoryText $cat -DetailText $evt.Detail
-    $why = "Sharing violations / oplock breaks force slow I/O paths and can stall AT event loops, causing speech lag or missed focus changes."
-    $confirm = "Check if the contending file/path is being scanned/indexed (Defender/EDR/SearchIndexer/backup) at the same time window."
-    $next = "Temporarily exclude the contended directories/files from scans; validate file locks with Handle.exe/Resource Monitor; test with ProcMon filters for the exact Path."
-    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; Why=$why; Confirm=$confirm; Next=$next }
+
+    $ux = "The application may feel sluggish or unresponsive during file operations."
+    $tc = "A '$($evt.Result)' occurred on '$($evt.Path)'. This forces the I/O manager to fall back to a slower, synchronous code path. This is often caused by contention with other processes (like Search Indexer, Anti-Virus, or Backup agents) trying to access the same file simultaneously."
+    $rm = "1. Identify the contending process using Handle.exe or Resource Monitor. 2. Temporarily exclude the path from Anti-Virus scanning. 3. If the path is on a network share, check for network latency or locking issues."
+
+    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; UserExperience=$ux; TechnicalContext=$tc; Remediation=$rm }
 }
 
 # Detector: Reparse loop
@@ -2049,10 +2078,12 @@ function Detect-ReparseLoop {
     $cat = "REPARSE LOOP"
     $sev = if ($AT_Processes.Contains($evt.Process)) { "High" } else { "Medium" }
     $oracle = Oracle-Match -ProcessName $evt.Process -PathText $evt.Path -CategoryText $cat -DetailText $evt.Detail
-    $why = "Repeated reparse resolution (OneDrive/FS virtualization/symlinks) can create infinite open loops and severe latency."
-    $confirm = "If the path lives under OneDrive/KFM/FSLogix/profile containers, test with a local non-synced path and watch if reparse events stop."
-    $next = "Check OneDrive Files On-Demand, FSLogix redirections, symlink/junction chains, and any AV on-access scanning of the same tree."
-    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; Why=$why; Confirm=$confirm; Next=$next }
+
+    $ux = "The application or system may hang, crash, or consume excessive CPU."
+    $tc = "Process '$($evt.Process)' hit a Reparse Point Loop (infinite symlink recursion) at '$($evt.Path)'. This often happens with misconfigured OneDrive folders, Junction Points, or containerized storage (FSLogix)."
+    $rm = "1. Inspect the path for circular Junction Points/Symlinks (use `dir /al /s`). 2. Check OneDrive 'Files On-Demand' settings. 3. Verify FSLogix profile container configurations."
+
+    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; UserExperience=$ux; TechnicalContext=$tc; Remediation=$rm }
 }
 
 # Detector: Load Image injection / hook DLLs
@@ -2078,10 +2109,12 @@ function Detect-HookInjection {
     $cat = "HOOK INJECTION"
     $sev = "High"
     $oracle = Oracle-Match -ProcessName $proc -PathText $evt.Path -CategoryText $cat -DetailText $evt.Detail
-    $why = "Third-party DLL injection into AT processes can cause invisible windows, focus loss, or crashes (especially with UIA/MSAA hooks)."
-    $confirm = "Re-run ProcMon with stack capture for Load Image and confirm the injector chain; compare to baseline machine without the security/VDI agent."
-    $next = "Work with security team: add ATT-enforced allowlist for AT hooks, reduce inline scanning on AT processes, or create process exclusions for AT binaries and their IPC objects."
-    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; Why=$why; Confirm=$confirm; Next=$next }
+
+    $ux = "The application may crash on startup, freeze, or exhibit erratic behavior (e.g., focus loss)."
+    $tc = "Third-party DLL '$module' was injected into the AT process '$proc'. This 'Hook Injection' pattern allows security/management tools to inspect or modify application behavior, but often destabilizes Assistive Technology hooks (UIA/MSAA)."
+    $rm = "1. Identify the vendor of '$module' (e.g., Security Agent, Virtualization Tool). 2. Configure the security tool to 'allowlist' or exclude the AT process from injection. 3. Update the third-party agent to the latest version."
+
+    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; UserExperience=$ux; TechnicalContext=$tc; Remediation=$rm }
 }
 
 # Detector: VC++ missing runtime DLLs
@@ -2092,10 +2125,12 @@ function Detect-VCppMissing {
     $cat="VC++ MISSING"
     $sev = if ($AT_Processes.Contains($evt.Process)) { "High" } else { "Medium" }
     $oracle = Oracle-Match -ProcessName $evt.Process -PathText $evt.Path -CategoryText $cat -DetailText $evt.Detail
-    $why = "Missing VC++ runtime DLLs often cause immediate app failure or silent feature loss (add-ins, OCR modules, bridge components)."
-    $confirm = "Check if the missing DLL should exist in System32/SysWOW64 or the app folder; compare to a healthy machine."
-    $next = "Install/repair the correct Microsoft Visual C++ Redistributables (x86/x64) and re-run the failing action."
-    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; Why=$why; Confirm=$confirm; Next=$next }
+
+    $ux = "The application may fail to start with a 'Missing DLL' error or crash silently."
+    $tc = "Process '$($evt.Process)' failed to load a Visual C++ Runtime dependency ('$($evt.Path)'). Result: '$($evt.Result)'. This typically means the required VC++ Redistributable package is not installed or corrupted."
+    $rm = "1. Identify the specific VC++ version required (e.g., 2015-2022). 2. Install/Repair the Microsoft Visual C++ Redistributable (x86 and x64). 3. Ensure the DLL is in the application directory or System32."
+
+    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; UserExperience=$ux; TechnicalContext=$tc; Remediation=$rm }
 }
 
 # Detector: Registry thrash
@@ -2110,10 +2145,12 @@ function Detect-RegistryThrash {
     $cat="REGISTRY THRASH"
     $sev = if ($AT_Processes.Contains($evt.Process)) { "High" } else { "Low" }
     $oracle = Oracle-Match -ProcessName $evt.Process -PathText $evt.Path -CategoryText $cat -DetailText $evt.Detail
-    $why="Excessive registry queries can indicate a tight retry loop, policy conflict, or broken add-in, consuming CPU and stalling AT threads."
-    $confirm="Look at the specific key being thrashed. If it's policy/app-compat, compare to baseline; if it's per-user settings, test with a fresh profile."
-    $next="Temporarily rename the key (if safe) or isolate the add-in/component; check GPO/MDM policy conflicts; confirm with stack traces."
-    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; Why=$why; Confirm=$confirm; Next=$next }
+
+    $ux = "High CPU usage and application unresponsiveness."
+    $tc = "Process '$($evt.Process)' is hammering the registry key '$($evt.Path)' with excessive queries (> $HotspotThreshold). This indicates a tight polling loop, a policy conflict, or a broken add-in repeatedly trying to read a missing configuration."
+    $rm = "1. Investigate the specific registry key to understand what configuration is being requested. 2. If it's a policy key, check Group Policy settings. 3. If it's an app key, try resetting the application preference or reinstalling the add-in."
+
+    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; UserExperience=$ux; TechnicalContext=$tc; Remediation=$rm }
 }
 
 # Detector: Heap/Stack corruption (via Process Exit detail)
@@ -2129,10 +2166,12 @@ function Detect-ProcessExitCodes {
     }
     $sev="Critical"
     $oracle = Oracle-Match -ProcessName $evt.Process -PathText $evt.Path -CategoryText $cat -DetailText $evt.Detail
-    $why="The process terminated due to memory corruption. This is frequently caused by injected DLLs, buggy add-ins, or graphics/input hooks."
-    $confirm="Correlate with EVTX 1000/1026 entries and any dumps generated at the same timestamp. Look for third-party DLLs loaded prior to exit."
-    $next="Collect crash dump (already present if .dmp). Identify fault module via Event Viewer or dump analysis. Remove/update the injecting module and retest."
-    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; Why=$why; Confirm=$confirm; Next=$next }
+
+    $ux = "The application crashes or disappears instantly."
+    $tc = "Process '$($evt.Process)' terminated with exit code '$code' ($cat). This is a fatal low-level crash. 0xC0000374 = Heap Corruption (Memory damage). 0xC0000409 = Stack Buffer Overrun (Security fail-fast). These are often caused by incompatible injected DLLs or buggy drivers."
+    $rm = "1. Review the 'Hook Injection' findings to see what 3rd party DLLs were loaded before the crash. 2. Update video/input drivers. 3. Check Windows Event Viewer (Application/System) for corresponding crash details (Event ID 1000/1001)."
+
+    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; UserExperience=$ux; TechnicalContext=$tc; Remediation=$rm }
 }
 
 
@@ -2145,10 +2184,12 @@ function Detect-HighLatency {
     $cat = "HIGH LATENCY"
     $sev = if ($evt.Duration -ge ($SlowThresholdSeconds * 5)) { "High" } else { "Medium" }
     $oracle = Oracle-Match -ProcessName $evt.Process -PathText $evt.Path -CategoryText $cat -DetailText $evt.Detail
-    $why = "Slow operations inside AT/target apps are a direct proxy for perceived lag (speech delay, missed focus changes, sluggish typing/echo)."
-    $confirm = "Sort by Duration and see if slow events cluster around one path (profile container, network share, AV-scanned folder, add-in)."
-    $next = "Add ProcMon filters for the Path and rerun with stack capture. If path is profile/OneDrive/FSLogix, test local profile. If it's a DLL load, validate code integrity and exclusions."
-    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; Why=$why; Confirm=$confirm; Next=$next }
+
+    $ux = "The application is slow to respond to user input (laggy)."
+    $tc = "Operation '$($evt.Operation)' on '$($evt.Path)' took $($evt.Duration) seconds, exceeding the threshold ($SlowThresholdSeconds s). High latency on specific files/paths suggests disk contention, network lag (if UNC), or filter driver overhead."
+    $rm = "1. Check disk queue length and I/O performance. 2. If the path is on a network, troubleshoot network latency. 3. Check for Anti-Virus/Filter drivers attaching to this operation (FLTMC)."
+
+    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; UserExperience=$ux; TechnicalContext=$tc; Remediation=$rm }
 }
 
 # Detector: Thread profiling (when enabled in ProcMon)
@@ -2159,10 +2200,12 @@ function Detect-ThreadProfiling {
     $cat="THREAD PROFILING HOTSPOT"
     $sev="Medium"
     $oracle = Oracle-Match -ProcessName $evt.Process -PathText $evt.Path -CategoryText $cat -DetailText $evt.Detail
-    $why="Thread profiling events can indicate heavy CPU consumption or scheduler pressure inside critical AT threads."
-    $confirm="Look for repeated thread profiling entries around user-visible lag; correlate with CPU spikes and any injected modules."
-    $next="Collect a short WPA trace (CPU sampling) during the lag and compare stacks with loaded modules listed in the report."
-    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; Why=$why; Confirm=$confirm; Next=$next }
+
+    $ux = "The application freezes briefly or stutters."
+    $tc = "High frequency of 'Thread Profiling' events detected for '$($evt.Process)'. This usually indicates the process is CPU-bound or thread-locked, often waiting on a resource or performing heavy computation."
+    $rm = "1. Use a performance profiler (WPR/WPA) to analyze CPU usage. 2. Check for infinite loops or heavy processing on the UI thread."
+
+    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; UserExperience=$ux; TechnicalContext=$tc; Remediation=$rm }
 }
 
 # Detector: Clipboard lock / clipboard service contention (heuristic)
@@ -2176,10 +2219,12 @@ function Detect-ClipboardLock {
     $cat="CLIPBOARD LOCK"
     $sev= if ($AT_Processes.Contains($evt.Process)) { "High" } else { "Medium" }
     $oracle = Oracle-Match -ProcessName $evt.Process -PathText $evt.Path -CategoryText $cat -DetailText $evt.Detail
-    $why="Clipboard contention can break copy/paste announcements, braille routing, and AT focus synchronization."
-    $confirm="See if clipboard-related operations spike when lag occurs (copy/paste, Remote Desktop, cloud clipboard)."
-    $next="Test with clipboard history off, RDP clipboard disabled, and temporarily exclude clipboard-related named objects from security scanning where possible."
-    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; Why=$why; Confirm=$confirm; Next=$next }
+
+    $ux = "Copy/Paste stops working, or the application freezes when attempting to access the clipboard."
+    $tc = "Process '$($evt.Process)' failed to open the clipboard ('$($evt.Result)') on path '$($evt.Path)'. This typically happens when another process (RDP clipboard chain, Clipboard History, or a remote management tool) has an exclusive lock on the clipboard and isn't releasing it."
+    $rm = "1. Identify the process holding the clipboard using 'Get-ClipboardOwner' (PowerShell) or a tool like 'ClipView'. 2. Restart the 'rdpclip.exe' process if in a remote session. 3. Disable 'Clipboard History' temporarily to test."
+
+    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; UserExperience=$ux; TechnicalContext=$tc; Remediation=$rm }
 }
 
 # Detector: Audio block / audio ducking stomp (heuristic)
@@ -2192,10 +2237,12 @@ function Detect-AudioDucking {
     $cat="AUDIO BLOCK/DUCKING"
     $sev="Medium"
     $oracle = Oracle-Match -ProcessName $evt.Process -PathText $evt.Path -CategoryText $cat -DetailText $evt.Detail
-    $why="If the audio engine/service is blocked, AT speech output can stutter, duck unexpectedly, or fail."
-    $confirm="Correlate with times speech cuts out; check if audiodg is repeatedly denied/blocked on audio endpoint keys."
-    $next="Check audio enhancements, conferencing apps, and security tools that inspect audio streams; test with clean audio driver profile and minimal voice apps."
-    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; Why=$why; Confirm=$confirm; Next=$next }
+
+    $ux = "Audio volume drops unexpectedly, stutters, or becomes silent."
+    $tc = "The Audio Engine (audiodg/audiosrv) encountered an error ('$($evt.Result)') accessing audio endpoints/policy config. This suggests a conflict with 'Audio Ducking' (communication activity attenuation) or an exclusive-mode driver lock."
+    $rm = "1. Disable 'Audio Enhancements' in Sound Control Panel. 2. Set 'Communications' activity to 'Do nothing' in Sound settings. 3. Check for third-party audio drivers (Nahimic, Waves, Dolby) causing contention."
+
+    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; UserExperience=$ux; TechnicalContext=$tc; Remediation=$rm }
 }
 
 # Detector: Legacy bridge missing (UIA/MSAA)
@@ -2206,10 +2253,12 @@ function Detect-LegacyBridge {
     $cat="LEGACY BRIDGE"
     $sev = if ($AT_Processes.Contains($evt.Process)) { "High" } else { "Medium" }
     $oracle = Oracle-Match -ProcessName $evt.Process -PathText $evt.Path -CategoryText $cat -DetailText $evt.Detail
-    $why="Missing UIA/MSAA bridge components or redirects can break screen reading/navigation without obvious crashes."
-    $confirm="Verify the DLL exists on disk and isn't blocked by WDAC/AppLocker; check SxS/WinSxS resolution and PATH."
-    $next="Repair Windows component store (DISM/SFC), reinstall the app/AT, validate architecture (x86 vs x64) of AT bridge components."
-    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; Why=$why; Confirm=$confirm; Next=$next }
+
+    $ux = "Screen readers (JAWS/NVDA) may be silent or fail to read specific application windows."
+    $tc = "Process '$($evt.Process)' failed to load legacy accessibility bridge components (OLEACC, UIA, MSAA). This breaks the 'Bridge' between the application's internal object model and the Assistive Technology."
+    $rm = "1. Ensure the application is installed correctly (repair install). 2. Check if 'uiautomationcore.dll' is present in System32. 3. Verify that Anti-Virus isn't blocking the loading of accessibility DLLs."
+
+    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; UserExperience=$ux; TechnicalContext=$tc; Remediation=$rm }
 }
 
 # Detector: COM class/category problems (HKCR\CLSID / class not registered)
@@ -2221,10 +2270,12 @@ function Detect-ComCat {
     $cat="COM CAT"
     $sev = if ($AT_Processes.Contains($evt.Process)) { "High" } else { "Low" }
     $oracle = Oracle-Match -ProcessName $evt.Process -PathText $evt.Path -CategoryText $cat -DetailText $evt.Detail
-    $why="COM registration or permission problems can prevent UI Automation providers, add-ins, or accessibility bridges from loading."
-    $confirm="Check the CLSID referenced and whether the server DLL/EXE exists; verify DCOM permissions if applicable."
-    $next="Re-register the provider DLL (if supported), repair the owning app, and verify HKCR merge view/policy redirections."
-    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; Why=$why; Confirm=$confirm; Next=$next }
+
+    $ux = "Application features (add-ins, automation) fail to load or crash."
+    $tc = "Process '$($evt.Process)' failed to instantiate a COM Class (CLSID) or Interface. Result: '$($evt.Result)'. The registry key for the component is missing or access was denied."
+    $rm = "1. Identify the GUID in the path and look it up to find the missing component. 2. Re-register the associated DLL using 'regsvr32'. 3. Repair the application installation."
+
+    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; UserExperience=$ux; TechnicalContext=$tc; Remediation=$rm }
 }
 
 # Detector: Filter/minifilter conflict signals (altitude collisions)
@@ -2234,10 +2285,12 @@ function Detect-FilterConflict {
     $cat="FILTER CONFLICT"
     $sev="Medium"
     $oracle = Oracle-Match -ProcessName $evt.Process -PathText $evt.Path -CategoryText $cat -DetailText $evt.Detail
-    $why="Minifilter altitude conflicts can produce unpredictable file I/O behavior, including blocking or unusual retries."
-    $confirm="Inventory minifilters (fltmc) and compare altitudes; correlate with the specific paths being accessed."
-    $next="Engage endpoint engineering; adjust filter ordering/versions; validate exclusions for AT processes and profile containers."
-    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; Why=$why; Confirm=$confirm; Next=$next }
+
+    $ux = "File operations are slow or fail with strange errors."
+    $tc = "A Minifilter altitude collision was detected. This means two file system filter drivers (e.g., Anti-Virus and Encryption) are trying to attach at the exact same 'altitude' (priority), causing instability."
+    $rm = "1. Run 'fltmc instances' to see loaded filters. 2. Update the drivers involved. 3. Contact the vendor to request a different altitude assignment."
+
+    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; UserExperience=$ux; TechnicalContext=$tc; Remediation=$rm }
 }
 
 # Detector: Secure Desktop contention (Consent/LogonUI)
@@ -2248,10 +2301,12 @@ function Detect-SecureDesktop {
     $cat="SECURE DESKTOP"
     $sev="Medium"
     $oracle = Oracle-Match -ProcessName $evt.Process -PathText $evt.Path -CategoryText $cat -DetailText $evt.Detail
-    $why="Secure Desktop transitions can break AT hooks and input if policies/tools interfere (UAC prompts, credential UI)."
-    $confirm="Check whether failures align with UAC prompts or credential dialogs; look for AT process access denial immediately before/after."
-    $next="Test with UAC settings, credential providers, and security UI hardening policies; ensure AT is approved for Secure Desktop usage."
-    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; Why=$why; Confirm=$confirm; Next=$next }
+
+    $ux = "Assistive Technology stops working on the Logon screen or UAC prompts."
+    $tc = "The process '$($evt.Process)' running on the Secure Desktop (Session 0/1) failed to access required resources. This security boundary isolates the logon/UAC UI, often blocking AT tools that aren't properly signed or configured for UI access."
+    $rm = "1. Ensure the AT tool is configured to 'Start on Logon Screen'. 2. Check Group Policy for 'User Account Control: Switch to the secure desktop when prompting for elevation'."
+
+    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; UserExperience=$ux; TechnicalContext=$tc; Remediation=$rm }
 }
 
 # Detector: MFA / auth network block (heuristic)
@@ -2263,10 +2318,12 @@ function Detect-MfaBlock {
     $cat="MFA BLOCK"
     $sev="Medium"
     $oracle = Oracle-Match -ProcessName $evt.Process -PathText $evt.Path -CategoryText $cat -DetailText $evt.Detail
-    $why="If identity endpoints are blocked/slow, sign-in/MFA loops can occur and apps may appear frozen."
-    $confirm="Validate proxy/SSL inspection, ZTNA policies, and DNS. Compare to a non-managed network."
-    $next="Capture a netsh trace or Fiddler/Wireshark in parallel; add allow rules for identity endpoints per org policy."
-    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; Why=$why; Confirm=$confirm; Next=$next }
+
+    $ux = "The application hangs at 'Signing in...' or prompts for credentials repeatedly."
+    $tc = "Network connection to Microsoft Identity endpoints (login.microsoftonline.com, etc.) failed or timed out. This prevents Modern Authentication (OAuth/SAML) from completing."
+    $rm = "1. Check firewall/proxy logs for blocks to Microsoft Identity URLs. 2. Verify if a 'SSL Inspection' (Man-in-the-Middle) proxy is breaking the certificate chain. 3. Test network connectivity to Azure AD."
+
+    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; UserExperience=$ux; TechnicalContext=$tc; Remediation=$rm }
 }
 
 # Detector: OCR failures (AT OCR modules / Windows OCR)
@@ -2278,10 +2335,12 @@ function Detect-OcrFail {
     $cat="OCR FAIL"
     $sev="Low"
     $oracle = Oracle-Match -ProcessName $evt.Process -PathText $evt.Path -CategoryText $cat -DetailText $evt.Detail
-    $why="Missing/blocked OCR language packs or model files can make AT OCR silently fail or be extremely slow."
-    $confirm="Check if the referenced OCR/language pack exists and is installed for the user; validate store app provisioning if needed."
-    $next="Install the correct language packs / OCR components and retest; ensure security tools aren't scanning large model folders inline."
-    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; Why=$why; Confirm=$confirm; Next=$next }
+
+    $ux = "OCR (Optical Character Recognition) features fail to read text from images."
+    $tc = "The application failed to load Windows OCR components or language models. This is often due to missing 'Windows Features' (Optical Character Recognition) or language packs."
+    $rm = "1. Install the OCR Language Pack for the user's language via Windows Settings. 2. Ensure the 'Windows.OCR' system DLLs are healthy (SFC /ScanNow)."
+
+    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; UserExperience=$ux; TechnicalContext=$tc; Remediation=$rm }
 }
 
 # Detector: WRP violation (system file protection)
@@ -2292,10 +2351,12 @@ function Detect-WrpViolation {
     $cat="WRP VIOLATION"
     $sev="Low"
     $oracle = Oracle-Match -ProcessName $evt.Process -PathText $evt.Path -CategoryText $cat -DetailText $evt.Detail
-    $why="Writes/opens blocked under protected Windows locations can indicate mis-installed components, broken updates, or unauthorized patching."
-    $confirm="Check whether the process is attempting to write/modify protected files. Most apps should not."
-    $next="Repair install, check update health, validate with SFC/DISM."
-    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; Why=$why; Confirm=$confirm; Next=$next }
+
+    $ux = "Application installation or update fails."
+    $tc = "Process '$($evt.Process)' attempted to write to a protected Windows system file (WRP/WFP) and was denied. This usually indicates a badly behaved installer or updater trying to replace core OS files."
+    $rm = "1. Check if the application requires 'Run as Administrator'. 2. The application may be incompatible with this version of Windows; check for updates."
+
+    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; UserExperience=$ux; TechnicalContext=$tc; Remediation=$rm }
 }
 
 # Detector: Token mismatch / impersonation problems
@@ -2305,10 +2366,12 @@ function Detect-TokenMismatch {
     $cat="TOKEN MISMATCH"
     $sev="Medium"
     $oracle = Oracle-Match -ProcessName $evt.Process -PathText $evt.Path -CategoryText $cat -DetailText $evt.Detail
-    $why="Impersonation/token issues can break IPC between AT services and user apps, especially in Citrix/VDI and hardened endpoints."
-    $confirm="Confirm session integrity levels and whether service->user brokers are failing."
-    $next="Validate service hardening policies, VDI broker settings, and AT broker components (ATBroker)."
-    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; Why=$why; Confirm=$confirm; Next=$next }
+
+    $ux = "The application fails to access network shares or inter-process communication fails."
+    $tc = "A 'Token Mismatch' or 'Impersonation Level' error occurred. This happens when a process tries to perform an action on behalf of a user but the security token doesn't allow it (e.g., Service trying to access user network drive without delegation)."
+    $rm = "1. Review the security context of the process (System vs User). 2. Check 'Impersonate a client after authentication' user rights assignment."
+
+    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; UserExperience=$ux; TechnicalContext=$tc; Remediation=$rm }
 }
 
 # Detector: Focus Bounce (Registry activity on ForegroundLockTimeout)
@@ -2322,11 +2385,12 @@ function Detect-FocusBounce {
     if ($evt.Operation -match 'Set') { $sev="High" }
 
     $oracle = Oracle-Match -ProcessName $evt.Process -PathText $evt.Path -CategoryText $cat -DetailText $evt.Detail
-    $why="Rapid changes or queries to focus stealing prevention settings (ForegroundLockTimeout) often precede or accompany 'focus wars' where apps fight for the foreground window."
-    $confirm="Filter ProcMon for 'ForegroundLockTimeout' and identify the process querying/setting it repeatedly."
-    $next="If an app is spamming this key, it may be trying to bypass OS focus protection. Check for 'SetForegroundWindow' calls in API traces or try enabling the 'LockSetForegroundWindow' compatibility shim."
 
-    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; Why=$why; Confirm=$confirm; Next=$next }
+    $ux = "The active window loses focus, interrupts typing, or flickers."
+    $tc = "Process '$($evt.Process)' is rapidly querying or modifying 'ForegroundLockTimeout'. This registry key controls focus stealing prevention. Excessive activity here suggests an application is fighting the OS to grab focus."
+    $rm = "1. Identify the background application fighting for focus. 2. Use the 'Focus Logger' tool to catch the culprit. 3. Disable 'Foreground Flash' or notifications for that app."
+
+    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; UserExperience=$ux; TechnicalContext=$tc; Remediation=$rm }
 }
 
 # Detector: Touch Input / Tablet PC contention (Touch War)
@@ -2349,11 +2413,12 @@ function Detect-TouchWar {
     if ($evt.Result -match 'ACCESS DENIED|TIMEOUT') { $sev="High" }
 
     $oracle = Oracle-Match -ProcessName $evt.Process -PathText $evt.Path -CategoryText $cat -DetailText $evt.Detail
-    $why="Contention or blockage in the Touch Input subsystem (Wisptis/TabTip) often leads to focus instability ('Focus Bounce') or input freezes for AT users."
-    $confirm="Look for 'bouncing' window focus or the OSK appearing/disappearing rapidly. Correlate with 'InputService' or 'Wisptis' errors."
-    $next="Stop 'Touch Keyboard and Handwriting Panel Service'; exclude Wisptis/TabTip from security scanning; verify if a physical touch screen is triggering interrupts."
 
-    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; Why=$why; Confirm=$confirm; Next=$next }
+    $ux = "Touchscreen input is ignored, or the On-Screen Keyboard flickers."
+    $tc = "Contention detected in the Touch Input subsystem (Wisptis/TabTip). The 'Tablet PC Input Service' is being blocked or timed out, often due to conflict with third-party tablet drivers (Wacom/Logitech)."
+    $rm = "1. Restart the 'Touch Keyboard and Handwriting Panel Service'. 2. Check for driver conflicts between Windows Ink and vendor drivers. 3. Calibrate the touch screen."
+
+    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; UserExperience=$ux; TechnicalContext=$tc; Remediation=$rm }
 }
 
 # Detector: Browser renderer loop (Process Create spam)
@@ -2374,10 +2439,12 @@ function Detect-BrowserLoop {
             $cat = "BROWSER LOOP"
             $sev = "High"
             $oracle = Oracle-Match -ProcessName $evt.Process -PathText $evt.Path -CategoryText $cat -DetailText $evt.Detail
-            $why = "The browser is spawning child processes (renderers) repeatedly. This indicates a crash loop, 'Sad Tab', or incompatible injection."
-            $confirm = "Check 'Process Exit' events for $childEx to see if they are crashing with 0xC0000... codes."
-            $next = "Disable browser extensions; check for third-party security injection into the browser; try --disable-features=RendererCodeIntegrity."
-            return @{ Category=$cat; Severity=$sev; Oracle=$oracle; Why=$why; Confirm=$confirm; Next=$next }
+
+            $ux = "The browser is slow, pages crash ('Aw Snap'), or high CPU usage."
+            $tc = "The browser parent process '$($evt.Process)' is repeatedly spawning child renderer processes '$childEx'. This 'Renderer Crash Loop' usually happens when security software injects incompatible code into the renderer sandbox."
+            $rm = "1. Check for 'Hook Injection' in the browser process. 2. Disable 'Renderer Code Integrity' (testing only). 3. Update or remove the conflicting security agent extension."
+
+            return @{ Category=$cat; Severity=$sev; Oracle=$oracle; UserExperience=$ux; TechnicalContext=$tc; Remediation=$rm }
         }
     }
     return $null
@@ -2444,9 +2511,10 @@ function Detect-KnownScenarios {
         # Match found!
         $cat = "KNOWN SCENARIO"
         $sev = "High"
-        $why = "Matched scenario #$($s.Id): $($s.Title)"
-        $confirm = "Validate against logic: $($s.Title). Cause: $($s.Cause)"
-        $next = "Potential Cause: $($s.Cause)"
+
+        $ux = "Issue detected: $($s.Title)"
+        $tc = "The engine matched a known failure pattern (Scenario #$($s.Id)). Logic: Operation '$($s.Op)' result '$($s.Res)' on path '$($s.Path)'. `n`nRoot Cause Context: $($s.Cause)"
+        $rm = "Refer to the 'Root Cause Context' for specific fix instructions. Verify if the environment matches the scenario conditions."
 
         # Oracle stub
         $oracle = @{
@@ -2455,7 +2523,7 @@ function Detect-KnownScenarios {
             url = ""
         }
 
-        return @{ Category=$cat; Severity=$sev; Oracle=$oracle; Why=$why; Confirm=$confirm; Next=$next }
+        return @{ Category=$cat; Severity=$sev; Oracle=$oracle; UserExperience=$ux; TechnicalContext=$tc; Remediation=$rm }
     }
     return $null
 }
@@ -2490,11 +2558,12 @@ function Detect-NetFailover {
                 $cat = "IPV6 FAILOVER"
                 $sev = "Medium"
                 $oracle = Oracle-Match -ProcessName $evt.Process -PathText $evt.Path -CategoryText $cat -DetailText $evt.Detail
-                $why = "Application attempted IPv6, failed, and fell back to IPv4 within $([math]::Round($delta,2)) seconds. This adds invisible latency to every connection."
-                $confirm = "Check if the destination host has AAAA records but the local network doesn't support IPv6 routing."
-                $next = "Disable IPv6 on the adapter if not supported, or fix IPv6 routing/firewall rules."
 
-                return @{ Category=$cat; Severity=$sev; Oracle=$oracle; Why=$why; Confirm=$confirm; Next=$next }
+                $ux = "Network connections take 3-5 seconds to establish (Latency)."
+                $tc = "Application attempted IPv6, failed, and fell back to IPv4 within $([math]::Round($delta,2)) seconds. This 'Happy Eyeballs' failover adds latency to every connection."
+                $rm = "1. Verify IPv6 connectivity on the network. 2. If IPv6 is not supported, disable it on the adapter or prefer IPv4 via prefix policy."
+
+                return @{ Category=$cat; Severity=$sev; Oracle=$oracle; UserExperience=$ux; TechnicalContext=$tc; Remediation=$rm }
             }
         }
     }
@@ -2633,11 +2702,12 @@ function Stream-ProcMonCsv {
             if ([Math]::Abs(($tod - $Suspect.Time).TotalSeconds) -le 0.5) {
                  $cat="SECURITY LOCK"
                  $sev="Critical"
-                 $why="A security process ($($Suspect.Proc)) accessed this path immediately before the AT process was denied/blocked."
-                 $confirm="This indicates a race condition or aggressive scanning lock."
-                 $next="Exclude path '$p' from $($Suspect.Proc) scanning or real-time protection."
 
-                 Add-Finding -Category $cat -Severity $sev -Process $proc -PID $pid -TID $tid -User $usr -ImagePath $img -CommandLine $cmd -Operation $op -Path $p -Result $res -Detail ("Contention with: " + $Suspect.Proc) -Time $tod -Duration $dur -Why $why -HowToConfirm $confirm -NextSteps $next -Oracle $null | Out-Null
+                 $ux="The application may freeze or crash due to a race condition with security software."
+                 $tech="Security process '$($Suspect.Proc)' accessed '$p' immediately ($([math]::Round([Math]::Abs(($tod - $Suspect.Time).TotalSeconds), 3))s) before the AT process '$proc' was denied access. This pattern (Security Fratricide) indicates aggressive inline scanning or locking."
+                 $rem="Exclude the path '$p' from $($Suspect.Proc) scanning. Configure the security agent to trust the AT process signature."
+
+                 Add-Finding -Category $cat -Severity $sev -Process $proc -PID $pid -TID $tid -User $usr -ImagePath $img -CommandLine $cmd -Operation $op -Path $p -Result $res -Detail ("Contention with: " + $Suspect.Proc) -Time $tod -Duration $dur -UserExperience $ux -TechnicalContext $tech -Remediation $rem -SourceFile $CsvPath -SourceLine $i -Oracle $null | Out-Null
             }
         }
 
@@ -2649,7 +2719,15 @@ function Stream-ProcMonCsv {
             $existing = ($Findings | Where-Object { $_.Category -eq $r.Category }).Count
             if ($existing -ge $MaxFindingsPerCategory) { continue }
 
-            $fid = Add-Finding -Category $r.Category -Severity $r.Severity -Process $evt.Process -PID $evt.PID -TID $evt.TID -User $evt.User -ImagePath $evt.ImagePath -CommandLine $evt.CommandLine -Operation $evt.Operation -Path $evt.Path -Result $evt.Result -Detail $evt.Detail -Time $evt.Time -Duration $evt.Duration -Why $r.Why -HowToConfirm $r.Confirm -NextSteps $r.Next -Oracle $r.Oracle
+            # Support both new and legacy detector returns
+            $ux = if($r.UserExperience){$r.UserExperience}else{""}
+            $tc = if($r.TechnicalContext){$r.TechnicalContext}else{""}
+            $rm = if($r.Remediation){$r.Remediation}else{""}
+            $legacyWhy = if($r.Why){$r.Why}else{""}
+            $legacyConfirm = if($r.Confirm){$r.Confirm}else{""}
+            $legacyNext = if($r.Next){$r.Next}else{""}
+
+            $fid = Add-Finding -Category $r.Category -Severity $r.Severity -Process $evt.Process -PID $evt.PID -TID $evt.TID -User $evt.User -ImagePath $evt.ImagePath -CommandLine $evt.CommandLine -Operation $evt.Operation -Path $evt.Path -Result $evt.Result -Detail $evt.Detail -Time $evt.Time -Duration $evt.Duration -UserExperience $ux -TechnicalContext $tc -Remediation $rm -Why $legacyWhy -HowToConfirm $legacyConfirm -NextSteps $legacyNext -SourceFile $CsvPath -SourceLine $i -Oracle $r.Oracle
 
             if ($fid) { Add-Evidence -FindingId $fid -Evt $evt }
         }
@@ -2751,10 +2829,25 @@ $BySev = $Findings | Group-Object Severity | Sort-Object Name
 $ByCat = $Findings | Group-Object Category | Sort-Object Count -Descending
 
 # Artifact inventory table rows
+$HashCache = @{}
+function Get-FileSha256 {
+    param([string]$FilePath)
+    if (-not (Test-Path -LiteralPath $FilePath)) { return "" }
+    if ($HashCache.ContainsKey($FilePath)) { return $HashCache[$FilePath] }
+    try {
+        $h = (Get-FileHash -LiteralPath $FilePath -Algorithm SHA256 -ErrorAction Stop).Hash
+        $HashCache[$FilePath] = $h
+        return $h
+    } catch {
+        return "HASH_FAIL"
+    }
+}
+
 function ArtifactRows($files, [string]$label, [int]$cap=250) {
     $rows = ""
     foreach ($f in ($files | Sort-Object Length -Descending | Select-Object -First $cap)) {
-        $rows += "<tr><td>$label</td><td>$(HtmlEncode($f.Name))</td><td>$(HtmlEncode($f.FullName))</td><td>$([math]::Round($f.Length/1KB,1))</td><td>$(HtmlEncode($f.LastWriteTime.ToString("s")))</td></tr>`n"
+        $hash = Get-FileSha256 -FilePath $f.FullName
+        $rows += "<tr><td>$label</td><td>$(HtmlEncode($f.Name))</td><td>$(HtmlEncode($f.FullName))</td><td>$([math]::Round($f.Length/1KB,1))</td><td>$(HtmlEncode($f.LastWriteTime.ToString("s")))</td><td class='mono small'>$hash</td></tr>`n"
     }
     return $rows
 }
@@ -2792,13 +2885,17 @@ foreach ($f in $FindingsSorted) {
             $evRows += "<tr><td>$(HtmlEncode($ev.Time.ToString()))</td><td>$(HtmlEncode($ev.Process))</td><td>$(HtmlEncode($ev.Operation))</td><td class='mono'>$(HtmlEncode($ev.Path))</td><td>$(HtmlEncode($ev.Result))</td><td class='mono'>$(HtmlEncode($ev.Detail))</td><td class='mono'>$(HtmlEncode([string]::Format('{0:0.000000}', $ev.Duration)))</td></tr>"
         }
     }
+    $hash = Get-FileSha256 -FilePath $f.SourceFile
     $Rows += "<tr id='detail-$(HtmlEncode($f.Id))' class='detailRow'><td colspan='15'>" +
              "<div class='detailBox'>" +
-             "<div><b>Why it matters:</b> $(HtmlEncode($f.Why))</div>" +
-             "<div><b>How to confirm:</b> $(HtmlEncode($f.HowToConfirm))</div>" +
-             "<div><b>Next steps:</b> $(HtmlEncode($f.NextSteps))</div>" +
+             "<div class='grid-3'>" +
+             "<div class='box ux'><h3>User Experience</h3>$(HtmlEncode($f.UserExperience))</div>" +
+             "<div class='box tech'><h3>Technical Context</h3>$(HtmlEncode($f.TechnicalContext))</div>" +
+             "<div class='box fix'><h3>Remediation</h3>$(HtmlEncode($f.Remediation))</div>" +
+             "</div>" +
              "<div><b>Image path:</b> <span class='mono'>$(HtmlEncode($f.ImagePath))</span></div>" +
              "<div><b>Command line:</b> <span class='mono'>$(HtmlEncode($f.CommandLine))</span></div>" +
+             "<div class='coc'><b>Chain of Custody:</b> File: <span class='mono'>$(HtmlEncode($f.SourceFile))</span> | Line: <span class='mono'>$($f.SourceLine)</span> | SHA256: <span class='mono'>$hash</span></div>" +
              "<div class='subhead'>Evidence samples (ProcMon/Aux correlated):</div>" +
              "<table class='ev'><thead><tr><th>Time</th><th>Proc</th><th>Op</th><th>Path</th><th>Result</th><th>Detail</th><th>Dur</th></tr></thead><tbody>$evRows</tbody></table>" +
              "</div></td></tr>`n"
@@ -2820,7 +2917,9 @@ $Top = ($FindingsSorted | Select-Object -First 12)
 $TopNext = "<ol>"
 foreach ($t in $Top) {
     $desc = if ($t.OracleTitle) { $t.OracleTitle } else { $t.Category }
-    $TopNext += "<li><b>$(HtmlEncode($desc))</b> ($($t.Category)) in <span class='mono'>$(HtmlEncode($t.Process))</span> at <span class='mono'>$(HtmlEncode($t.Time.ToString()))</span>  -  Path: <span class='mono'>$(HtmlEncode($t.Path))</span></li>"
+    $action = if ($t.Remediation) { $t.Remediation } else { "Investigate technical context." }
+    if ($action.Length -gt 200) { $action = $action.Substring(0,200) + "..." }
+    $TopNext += "<li><b>$(HtmlEncode($desc))</b> ($($t.Category)) <br><span class='small'>Action: $(HtmlEncode($action))</span></li>"
 }
 $TopNext += "</ol>"
 
@@ -2878,6 +2977,13 @@ $Html = @"
   .copy,.toggle{background:#223049;color:#e6edf3;border:1px solid #2a3240;border-radius:8px;padding:4px 10px;cursor:pointer}
   .detailRow{display:none}
   .detailBox{margin:8px 0;background:#0e1116;border:1px solid #2a3240;border-radius:10px;padding:10px}
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+  .box { padding: 10px; border-radius: 6px; background: #1c2128; border: 1px solid #30363d; }
+  .box h3 { margin-top: 0; font-size: 14px; color: #8b949e; border-bottom: 1px solid #30363d; padding-bottom: 5px; }
+  .ux { border-left: 4px solid #d29922; }
+  .tech { border-left: 4px solid #58a6ff; }
+  .fix { border-left: 4px solid #238636; }
+  .coc { margin-top: 10px; font-size: 11px; color: #8b949e; border-top: 1px solid #30363d; padding-top: 5px; }
   .subhead{margin-top:10px;font-weight:700}
   .ev th{background:#0e1116;position:static}
   a{color:#93c5fd}

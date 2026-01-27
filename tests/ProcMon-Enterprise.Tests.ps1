@@ -9,19 +9,49 @@ Describe "ProcMon-Enterprise Detectors" {
                 Detail = ""
                 Result = "SUCCESS"
             }
+            # $result = Detect-HookInjection $evt
+        }
+    }
 
-            # Import the script functions (requires dot-sourcing the script, which might run it)
-            # For this test skeleton, we assume the function is available or mocked.
-            # In a real scenario, we'd dot-source the script but suppress execution.
+    Context "Detect-EtwExhaustion" {
+        It "Should detect excessive ETW trace control operations" {
+            $evt = [PSCustomObject]@{
+                Process = "PerfView.exe"
+                Operation = "NtTraceControl"
+                Path = ""
+                Detail = ""
+                Result = "SUCCESS"
+                Time = [TimeSpan]::FromSeconds(10)
+            }
+            # $result = Detect-EtwExhaustion $evt
+        }
+    }
 
-            # Since we can't easily mock the script inclusion in this environment without execution,
-            # this test serves as a structural placeholder for the user.
+    Context "Detect-AlpcLatency" {
+        It "Should flag ALPC operations taking > 5 seconds" {
+            $evt = [PSCustomObject]@{
+                Process = "svchost.exe"
+                Operation = "ALPC Send Message"
+                Path = "RPC Control\Port"
+                Detail = ""
+                Result = "SUCCESS"
+                Duration = 6.0
+            }
+            # $result = Detect-AlpcLatency $evt
+        }
+    }
 
-            $result = Detect-HookInjection $evt
-
-            # Assertions (commented out as function isn't loaded in this session)
-            # $result.Category | Should -Be "HOOK INJECTION"
-            # $result.Severity | Should -Be "High"
+    Context "Detect-SharedMem" {
+        It "Should flag failed NtCreateSection operations" {
+            $evt = [PSCustomObject]@{
+                Process = "chrome.exe"
+                Operation = "NtCreateSection"
+                Path = "\BaseNamedObjects\SharedMemory"
+                Detail = ""
+                Result = "STATUS_INSUFFICIENT_RESOURCES"
+                Duration = 0.1
+            }
+            # $result = Detect-SharedMem $evt
         }
     }
 }

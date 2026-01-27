@@ -1887,6 +1887,73 @@ function Resolve-HeaderName {
     return $null
 }
 
+# Detector: Shared Memory Contention (NtCreateSection)
+function Detect-SharedMem {
+    param($evt)
+    if ($evt.Operation -notmatch 'CreateSection|MapViewOfSection') { return $null }
+    if ($evt.Result -eq "SUCCESS" -and $evt.Duration -lt 0.5) { return $null }
+
+    $cat = "SHARED MEMORY"
+    $sev = "Medium"
+
+    # Escalation for failures
+    if ($evt.Result -match 'ACCESS DENIED|INSUFFICIENT_RESOURCES|NO_MEMORY') { $sev = "High" }
+
+    $oracle = Oracle-Match -ProcessName $evt.Process -PathText $evt.Path -CategoryText $cat -DetailText $evt.Detail
+
+    $ux = "Application crashes or white-screens (especially Electron/Chrome apps)."
+    $tc = "Operation '$($evt.Operation)' on Shared Memory Section '$($evt.Path)' failed or was slow. Result: '$($evt.Result)'. This often indicates resource exhaustion (Page File / Commit Limit) or security permission issues with the Section Object."
+    $rm = "1. Check Commit Charge (Memory) in Task Manager. 2. Verify Page File settings (is it disabled?). 3. Check for security software blocking 'Section' object creation."
+
+    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; UserExperience=$ux; TechnicalContext=$tc; Remediation=$rm }
+}
+
+# Detector: ALPC Latency (IPC Hangs)
+function Detect-AlpcLatency {
+    param($evt)
+    if ($evt.Operation -notmatch 'ALPC|RPC|LPC') { return $null }
+    if ($evt.Duration -lt 1.0) { return $null }
+
+    $cat = "ALPC LATENCY"
+    $sev = if ($evt.Duration -ge 5.0) { "High" } else { "Medium" }
+    $oracle = Oracle-Match -ProcessName $evt.Process -PathText $evt.Path -CategoryText $cat -DetailText $evt.Detail
+
+    $ux = "The application freezes while waiting for another process."
+    $tc = "An Advanced Local Procedure Call (ALPC) operation took $($evt.Duration) seconds. This indicates a synchronous IPC wait chain where the target process is hung or busy. Common in COM/DCOM/RPC scenarios."
+    $rm = "1. Identify the target process (often visible in the 'Path' as a port name or via 'Detail'). 2. Check if the target service/process is hung. 3. Use 'Analyze Wait Chain' in Task Manager."
+
+    return @{ Category=$cat; Severity=$sev; Oracle=$oracle; UserExperience=$ux; TechnicalContext=$tc; Remediation=$rm }
+}
+
+# Detector: ETW Exhaustion (Trace Control)
+$EtwRateByProc = @{}
+function Detect-EtwExhaustion {
+    param($evt)
+    # NtTraceControl or general ETW ops
+    if ($evt.Operation -notmatch 'TraceControl|ETW') { return $null }
+
+    # Bucket by Process + Second
+    $bucket = [int][Math]::Floor($evt.Time.TotalSeconds)
+    $key = ("{0}|{1}" -f $evt.Process, $bucket).ToLowerInvariant()
+
+    if (-not $EtwRateByProc.ContainsKey($key)) { $EtwRateByProc[$key] = 0 }
+    $EtwRateByProc[$key]++
+
+    # Trigger if > 100 trace ops/sec (very high for normal apps)
+    if ($EtwRateByProc[$key] -eq 100) {
+        $cat = "ETW EXHAUSTION"
+        $sev = "Medium"
+        $oracle = Oracle-Match -ProcessName $evt.Process -PathText $evt.Path -CategoryText $cat -DetailText $evt.Detail
+
+        $ux = "System performance degrades; logging tools may fail or drop events."
+        $tc = "Process '$($evt.Process)' is generating excessive ETW control traffic (>100 ops/sec). This indicates a diagnostic tool, EDR agent, or debugger is thrashing the Event Tracing for Windows subsystem."
+        $rm = "1. Check for running diagnostic tools (PerfView, WPR, ProcMon itself). 2. Investigate security agents that hook ETW (EDR/XDR). 3. Restart the offending service."
+
+        return @{ Category=$cat; Severity=$sev; Oracle=$oracle; UserExperience=$ux; TechnicalContext=$tc; Remediation=$rm }
+    }
+    return $null
+}
+
 function Parse-TimeOfDay {
     param([string]$s)
     if ([string]::IsNullOrWhiteSpace($s)) { return [TimeSpan]::Zero }
@@ -2682,7 +2749,10 @@ $Detectors = @(
     ${function:Detect-RegistryThrash},
     ${function:Detect-NetFailover},
     ${function:Detect-FontBlocking},
-    ${function:Detect-PacketStorm}
+    ${function:Detect-PacketStorm},
+    ${function:Detect-EtwExhaustion},
+    ${function:Detect-AlpcLatency},
+    ${function:Detect-SharedMem}
 )
 # =========================
 # 7) STREAM PARSE CSV + APPLY DETECTORS

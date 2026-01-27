@@ -1,4 +1,4 @@
-# 🧪 Scenario Detection Library (V1250)
+# 🧪 Scenario Detection Library (V1300)
 
 This library defines the deterministic and heuristic patterns used to identify system instability.
 
@@ -33,3 +33,10 @@ This library defines the deterministic and heuristic patterns used to identify s
 | **Filter Altitude War** | `0xC01C001F` on any `DeviceIoControl` involving `fs_mirror.sys`. | System BSOD or Video Intercept failure (Black screen). |
 | **ETW Starvation** | `STATUS_INSUFFICIENT_RESOURCES` on `TraceLog` paths. | JAWS starts but "UIA" support is broken (cannot read ribbons/menus). |
 | **Reparse Loop** | >500 `REPARSE` results on a single `OneDrive` or `SharePoint` path pattern. | Explorer hangs; CPU spikes to 100%. |
+
+## 5. Advanced Edge Cases (V1300 Additions)
+| Scenario | Logic Pattern | User Experience |
+| :--- | :--- | :--- |
+| **Quick Access FTP Freeze** | `Explorer` connecting to FTP site in Recent Files. | Explorer hangs on open. |
+| **Time Zone Auto Fail** | `RegSetValue` on `ActiveTimeBias` by `tzautoupdate`. | Time Zone update service fighting with location. |
+| **OOBE Complete Flag** | `RegQueryValue` on `OOBEComplete` registry key. | Search Indexer waiting for Out-Of-Box-Experience to finish. |

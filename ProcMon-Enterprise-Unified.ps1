@@ -2090,7 +2090,7 @@ $StartScenarios = @(
     @{ Id='1008'; Title="Liquid"; Op=""; Res=""; Lookup=""; Path=""; Cause="Physical" },
     @{ Id='1009'; Title="User Error"; Op=""; Res=""; Lookup=""; Path=""; Cause="Layer 8" },
     @{ Id='1010'; Title="Gremlins"; Op=""; Res=""; Lookup=""; Path=""; Cause="Undefined" },
-    @{ Id='1011'; Title="Swallowed Exception (CLR):"; Op=""; Res="`\.NET\ Runtime`\ logs\ "Application\ Error"\ event\ but\ no\ ProcMon\ crash"; Lookup="`.NET Runtime` logs "Application Error" event but no ProcMon crash"; Path="\.NET\ Runtime"; Cause="Dev caught exception but didn't log it" },
+    @{ Id='1011'; Title="Swallowed Exception (CLR):"; Op=""; Res="`\.NET\ Runtime`\ logs\ `"Application\ Error`"\ event\ but\ no\ ProcMon\ crash"; Lookup="`.NET Runtime` logs `"Application Error`" event but no ProcMon crash"; Path="\.NET\ Runtime"; Cause="Dev caught exception but didn't log it" },
     @{ Id='1012'; Title="WerFault Suppression:"; Op=""; Res=""; Lookup=""; Path="WerFault\.exe"; Cause="Headless mode crash" },
     @{ Id='1013'; Title="Stack Overflow (Silent):"; Op="Process\ Exit"; Res=""; Lookup=""; Path=""; Cause="Recursion limit hit, often no dump" },
     @{ Id='1014'; Title="Heap Corruption (Immediate):"; Op="Process\ Exit"; Res=""; Lookup=""; Path=""; Cause="Kernel kills app instantly to save OS" },

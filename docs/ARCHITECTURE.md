@@ -7,7 +7,9 @@ To analyze gigabyte-scale logs without RAM exhaustion, the engine uses a specifi
 
 ### State Management
 Instead of batching, the engine processes events continuously.
-* **Global Suspect Buffer:** Tracks the last time a Security Process touched a file. This state is preserved across the stream to detect "Touch-then-Deny" race conditions (contention) regardless of where they occur in the file.
+* **Global Suspect Buffer (GSB):** Tracks the last time a Security Process touched a file to detect contention race conditions.
+* **Reparse Count Buffer:** Tracks recursion depth to identify symlink loops.
+* **Network Rate Buffer:** Aggregates TCP/UDP ops per process per second to detect floods (Packet Storms).
 
 ## 2. The Global Suspect Buffer (GSB)
 The GSB is a `Dictionary<FilePath, EventObject>` representing the "Security State" of the system.
@@ -17,11 +19,11 @@ The GSB is a `Dictionary<FilePath, EventObject>` representing the "Security Stat
     ```powershell
     IF (AT_Event.Result == FAILURE) AND (GSB[AT_Event.Path].Time - AT_Event.Time < 0.5s) 
     THEN 
-        FLAG "Cross-Process Race Condition"
+        FLAG "Security Lock (Cross-Process Race Condition)"
     ```
 
-## 3. The "Oracle" Data Structure
-The Oracle is a multi-dimensional Hashtable enabling O(1) lookups for known issues.
+## 3. The "Oracle" Data Structure (V1300 Overseer)
+The Oracle is a multi-dimensional Hashtable enabling O(1) lookups for known issues, merged from offline cache files.
 * **Schema:**
     ```text
     ProcessName (Key)
@@ -30,11 +32,15 @@ The Oracle is a multi-dimensional Hashtable enabling O(1) lookups for known issu
         ├── Fix (String)
         └── Link (String: URL)
     ```
-* **Usage:** This bypasses heuristic scoring. If a match is found, it is treated as a **Confirmed Vendor Bug**.
+* **Offline Operation:** The V1300 engine relies on `ProcMon-OracleCache-Builder.ps1` to pre-fetch knowledge base data (Microsoft Release Health, JAWS Release Notes) into a local JSON database, ensuring air-gapped analysis capability.
 
-## 4. Detection Logic: The "Strict Fratricide" Model
-To prevent false positives, we define "AT Fratricide" strictly:
-* **Condition A:** Multiple AT processes (e.g., `jfw.exe` AND `nvda.exe`) are present in the log.
-* **Condition B:** One AT process attempts `OpenProcess` on the other.
-* **Condition C:** The result is `ACCESS_DENIED`.
-* *Note:* Mere presence of multiple ATs is **not** sufficient for a flag.
+## 4. Detection Logic
+The detection engine employs a hybrid model:
+* **Deterministic Matching:** Using the `SCENARIO_LIBRARY` (IDs 1-1500) to match exact `Operation` + `Result` + `Path` patterns.
+* **Heuristic Analysis:** Code modules (e.g., `Detect-HookInjection`, `Detect-ThreadProfiling`) that analyze behavior over time or check for patterns (e.g., "Any CrowdStrike DLL loaded into an AT process").
+* **Strict Fratricide:** A specific subset of heuristics that flags when one Security/AT agent attacks another.
+
+## 5. Report Generation & Evidence
+* **Three-Layer Explanation:** Findings are mapped to `User Experience`, `Technical Context`, and `Remediation` layers.
+* **Chain of Custody:** Every finding records the Source File, Line Number, and SHA256 Hash of the artifact.
+* **Hash Cache:** An internal cache prevents re-hashing the same file multiple times during report generation.
